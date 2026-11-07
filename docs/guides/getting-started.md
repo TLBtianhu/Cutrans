@@ -4,7 +4,7 @@
 
 ## 便携版本
 
-从 [GitHub Releases](https://github.com/TLBtianhu/Cutrans/releases) 获取分发物，具体能力以所下载版本的说明为准。下列命令适用于当前源码生成的产物，旧 Release 的参数可能不同。便携包先解压到用户选择的位置，再只读检查声明并启动 VM：
+旧试验Release已撤下，当前尚无新的公开运行分发版本。本节适用于自行构建或后续发布的便携产物；公开下载将位于 [GitHub Releases](https://github.com/TLBtianhu/Cutrans/releases)，具体能力以对应版本说明为准。便携包先解压到用户选择的位置，再只读检查声明并启动 VM：
 
 ```powershell
 .\cutrans_diag.exe --inspect

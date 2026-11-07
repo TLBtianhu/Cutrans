@@ -31,7 +31,7 @@ cd Cutrans
 
 开发入口使用隐藏控制台并保留日志与退出码。详见[构建与验证](docs/development/building.md)。新产物在`zig-out/`暂存，复制到用户选择的位置后再日常运行；本机旧输出内仍有历史验证数据，清理须按[仓库布局](docs/development/repository-layout.md)核实，不能整目录删除。
 
-已有分发版本从 [GitHub Releases](https://github.com/TLBtianhu/Cutrans/releases) 获取，能力以该版本说明为准。启动与数据位置见[使用指南](docs/guides/getting-started.md)；安装器源码或预检通过不代表完整安装通过。
+当前以源码交付，旧试验发布已撤下。新的分发版本将在相应验收后发布到 [GitHub Releases](https://github.com/TLBtianhu/Cutrans/releases)。启动与数据位置见[使用指南](docs/guides/getting-started.md)；安装器源码或预检通过不代表完整安装通过。
 
 ## 阅读与目录
 
