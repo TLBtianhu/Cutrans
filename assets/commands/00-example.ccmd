@@ -1,0 +1,2 @@
+# 示例:打开已注册的编辑器;不会由 startup 自动执行。
+app.open editor

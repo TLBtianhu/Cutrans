@@ -1,0 +1,15 @@
+# First-party text is stable across Windows and source archives.
+/README.md text eol=lf
+/AGENTS.md text eol=lf
+/MEMORY.md text eol=lf
+/CONTRIBUTING.md text eol=lf
+/LICENSE text eol=lf
+/.gitignore text eol=lf
+/.gitattributes text eol=lf
+/build.zig text eol=lf
+/build.zig.zon text eol=lf
+/dependencies.lock.json text eol=lf
+/docs/** text=auto eol=lf
+/tools/*.py text eol=lf
+/tools/*.ps1 text eol=lf
+# Vendor source and its upstream attributes remain separately maintained.

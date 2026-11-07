@@ -1,0 +1,83 @@
+{
+  "format": "cutrans-dependencies/1",
+  "normalization": "Sorted portable paths + length-prefixed bytes; UTF-8 CRLF normalized to LF. Native exe/dll/lib/pdb and build caches excluded.",
+  "toolchain": {
+    "version": "0.17.0",
+    "url": "https://ziglang.org/download/0.17.0/zig-x86_64-windows-0.17.0.zip",
+    "archive_sha256": "b5663f69581dcf391293fbf16c06cb80d81d806545ce618b4d0bab7f0eb8c428",
+    "restore": "python tools/bootstrap.py",
+    "policy": "Restore compiler and lib from one verified archive; do not replace only zig.exe."
+  },
+  "sources": [
+    {
+      "name": "nanoui",
+      "path": "third_party/nanoui",
+      "upstream": "https://github.com/TLBtianhu/nanoui",
+      "declared_version": "0.12.0",
+      "upstream_revision": "00e5813dc5f524ece9a8f4aa37878cb6be1d125e",
+      "provenance": "See third_party/nanoui/VENDOR.md for official/fork/local layers.",
+      "effective_sha256": "597b14a24024df852b80f6a9eb08d4b4ed3355a3358600340d0d81f3988ff733",
+      "source_files": 805
+    },
+    {
+      "name": "zgui",
+      "path": "third_party/zgui",
+      "upstream": "https://github.com/zig-gamedev/zgui",
+      "declared_version": "0.6.0-dev",
+      "upstream_revision": null,
+      "provenance": "Original upstream revision was not recorded; retained source snapshot is Cutrans 6bfb9419c80b608bee47cec1eff14581cf46f9f3. Effective tree hash below pins the actual source without inventing provenance.",
+      "effective_sha256": "0809ada660910efff573e03ccfde627ec409202c415da0818ebc1d21fb25fbc2",
+      "source_files": 131
+    },
+    {
+      "name": "zglfw",
+      "path": "third_party/zglfw",
+      "upstream": "https://github.com/zig-gamedev/zglfw",
+      "declared_version": "0.10.0-dev",
+      "upstream_revision": null,
+      "provenance": "Original upstream revision was not recorded; retained source snapshot is Cutrans 6bfb9419c80b608bee47cec1eff14581cf46f9f3. Effective tree hash below pins the actual source without inventing provenance.",
+      "effective_sha256": "ca3ae2479326eee747606f88d2f1b59d1823dfc754712e13728b6dd3aea55cf3",
+      "source_files": 94
+    },
+    {
+      "name": "system_sdk",
+      "path": "third_party/system_sdk",
+      "upstream": "https://github.com/zig-gamedev/system_sdk",
+      "declared_version": "0.3.0-dev",
+      "upstream_revision": null,
+      "provenance": "Original upstream revision was not recorded; retained source snapshot is Cutrans 6bfb9419c80b608bee47cec1eff14581cf46f9f3. Effective tree hash below pins the actual source without inventing provenance. Cutrans repository fix: .gitattributes changes !text to -text to preserve the existing SDK bytes during Windows checkout/archive; no header/resource/library code changed. See docs/development/repository-layout.md.",
+      "effective_sha256": "fe8b0ae4c9f1ca718889b25a7073fbbd8510d3d0a45a641f786220f53f80feee",
+      "source_files": 2634
+    },
+    {
+      "name": "stb",
+      "path": "third_party/stb",
+      "upstream": "https://github.com/nothings/stb",
+      "declared_version": null,
+      "upstream_revision": null,
+      "provenance": "Original upstream revision was not recorded; retained source snapshot is Cutrans 6bfb9419c80b608bee47cec1eff14581cf46f9f3. Effective tree hash below pins the actual source without inventing provenance.",
+      "effective_sha256": "1cb1d07869622418883ceee5d9538643a83dcc1acd7a0789ea67d1f7a6f7321b",
+      "source_files": 2
+    },
+    {
+      "name": "wgpu",
+      "path": "third_party/wgpu",
+      "upstream": "https://github.com/gfx-rs/wgpu-native",
+      "declared_version": "29.0.1.1",
+      "upstream_revision": "v29.0.1.1",
+      "provenance": "Pinned release headers; native artifacts verified by tools/bootstrap.py.",
+      "effective_sha256": "c6b853534131932642669a85cc351879703f51ff0d53b53e8a415efb6725074b",
+      "source_files": 5
+    }
+  ],
+  "fetched_sources": [
+    {
+      "name": "http_zig",
+      "upstream": "https://github.com/justrach/http-zig",
+      "revision": "1f798e762f52ff81cc6c370b4f322c9e65064462",
+      "archive_sha256": "36d696751bf9662d409fd8767d6617027bc322f9eabdbdf72d615de109499bcc",
+      "zig_package_hash": "http_zig-0.1.0-2CB7E00SAwAnwnBkJDgCDm3zLwrCmZZkHNSw5t7X9Vbf",
+      "restore": "tools/bootstrap.py verifies archive and canonical Zig package hash, then populates local zig-pkg source cache."
+    }
+  ]
+}

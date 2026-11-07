@@ -1,0 +1,36 @@
+//! 跨应用共享运行时入口
+
+pub const command = @import("command.zig");
+pub const startup = @import("startup.zig");
+pub const config = @import("config.zig");
+pub const apps = @import("apps.zig");
+pub const surfaces = @import("surfaces.zig");
+pub const session = @import("session.zig");
+pub const status = @import("status.zig");
+pub const context = @import("context.zig");
+pub const console = @import("console.zig");
+pub const documents = @import("documents.zig");
+pub const tasks = @import("tasks.zig");
+pub const render = @import("render.zig");
+pub const paths = @import("paths.zig");
+pub const document_commands = @import("document_commands.zig");
+pub const image = @import("image.zig");
+pub const history = @import("history.zig");
+pub const stream = @import("stream.zig");
+pub const escapement = @import("escapement.zig");
+pub const capabilities = @import("capabilities.zig");
+pub const storage = @import("storage.zig");
+pub const task_journal = @import("task_journal.zig");
+pub const history_journal = @import("history_journal.zig");
+pub const vm_pack = @import("vm_pack.zig");
+pub const mounts = @import("mounts.zig");
+pub const replay = @import("replay.zig");
+pub const input_replay = @import("input_replay.zig");
+pub const input_recording = @import("input_recording.zig");
+pub const input_actions = @import("input_actions.zig");
+pub const playback = @import("playback.zig");
+pub const assets = @import("assets.zig");
+pub const export_inputs = @import("export_inputs.zig");
+pub const external_sources = @import("external_sources.zig");
+pub const library = @import("resource_library.zig");
+pub const resource_versions = @import("resource_versions.zig");

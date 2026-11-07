@@ -1,0 +1,7 @@
+cutrans_input_replay=1
+clock=logical
+event=1,1000000,pointer_move,24,32,
+event=2,2000000,pointer_down,24,32,
+event=3,3000000,pointer_up,24,32,
+event=4,4000000,text,0,0,你好
+event=5,5000000,focus,1,0,

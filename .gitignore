@@ -1,0 +1,23 @@
+zig-out/
+.zig-cache/
+zig-pkg/
+scratch/
+tools/InnoSetup/
+tools/zig/
+imgui.ini
+.cutrans-dev/
+__pycache__/
+*.py[cod]
+/.env
+/.env.*
+!/.env.example
+.DS_Store
+Thumbs.db
+/apps/desktop/assets/ui/desktop.cui
+/config/startup.ccb
+
+# 第三方与本机构建二进制由 tools/bootstrap.py 恢复,不进入源码快照
+*.exe
+*.dll
+*.lib
+*.pdb

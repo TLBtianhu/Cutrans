@@ -1,0 +1,31 @@
+{
+  "format": "cutrans-view-v2",
+  "views": [
+    {
+      "id": "home",
+      "label": "首页",
+      "icon": "\uf00b",
+      "side": {
+        "type": "vstack",
+        "children": []
+      },
+      "content": {
+        "type": "vstack",
+        "children": []
+      }
+    },
+    {
+      "id": "apps",
+      "label": "应用",
+      "icon": "\uf2f5",
+      "side": {
+        "type": "vstack",
+        "children": []
+      },
+      "content": {
+        "type": "vstack",
+        "children": []
+      }
+    }
+  ]
+}

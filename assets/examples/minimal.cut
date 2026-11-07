@@ -1,0 +1,7 @@
+version=2
+resolution=1920x1080
+fps=30
+nodes:
+c0=testsrc{}
+c1=gain{ in:c0,value:0.8 }
+output=c1

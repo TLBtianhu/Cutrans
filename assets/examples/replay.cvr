@@ -1,0 +1,8 @@
+cutrans_replay=1
+clock=logical
+event=1,1000000,ok,doc.open,
+event=2,2000000,ok,editor.gain.set,c1 0.25
+event=3,3000000,ok,history.undo,
+event=4,4000000,ok,history.redo,
+event=5,5000000,accepted,editor.export.png,session://exports/replay.png
+event=6,6000000,ok,doc.save,session://documents/replay.cut

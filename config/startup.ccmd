@@ -1,0 +1,10 @@
+# 启动清单的可读源码,构建期由 config/compile_startup.py 编译成 startup.ccb
+# 这里只声明会话策略;runtime 直接执行 CCB,不依赖 CLI 或某个桌面解析。
+console.cli.start
+session.shell desktop
+taskbar.pin app:desktop
+taskbar.pin app:editor
+taskbar.pin app:library
+taskbar.pin console:cli
+font.main NotoSansSC
+locale.default zh-CN

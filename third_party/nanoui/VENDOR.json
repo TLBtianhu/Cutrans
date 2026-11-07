@@ -1,0 +1,165 @@
+{
+  "format": "cutrans-vendor/1",
+  "name": "nanoui",
+  "official": {
+    "repository": "https://github.com/justrach/nanoui",
+    "release": "v0.12.0",
+    "commit": "d1330a84fca9581cdcaff7fa71041b2cccf3066b",
+    "archive_sha256": "bc2978b4a9a75ec480ae93bd463a4efcbb21575ba8f47b0080045cf4785a4657"
+  },
+  "fork": {
+    "repository": "https://github.com/TLBtianhu/nanoui",
+    "branch": "otto-091",
+    "commit": "00e5813dc5f524ece9a8f4aa37878cb6be1d125e",
+    "version": "0.12.0",
+    "archive_sha256": "b147aefb0ef2804444a10612117cd17e782183383b9a9234bc800558016857eb",
+    "deviations_from_official": [
+      {
+        "change": "modified",
+        "path": "AGENTS.md"
+      },
+      {
+        "change": "modified",
+        "path": "build.zig"
+      },
+      {
+        "change": "modified",
+        "path": "examples/sgbus/onboarding.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/kit/display.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/ui/atlas_tt.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/ui/content.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/ui/frame_log.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/ui/images.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/ui/metal.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/ui/paint.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/ui/raster.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/ui/tester.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/ui/tests.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/ui/tests_images.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/ui/tests_raster.zig"
+      },
+      {
+        "change": "added",
+        "path": "src/ui/trace.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/ui/tt/font.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/ui/tt/fontdb.zig"
+      },
+      {
+        "change": "added",
+        "path": "src/ui/tt/fontindex.zig"
+      },
+      {
+        "change": "added",
+        "path": "src/ui/tt/fontindex_win.zig"
+      },
+      {
+        "change": "added",
+        "path": "src/ui/tt/fontmap.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/ui/tt/tests.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/ui/ui.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/ui/widgets.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/window_types.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/windows/app.zig"
+      },
+      {
+        "change": "added",
+        "path": "src/windows/frame_timing.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/windows/surface.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/windows/surface_gpu.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/windows/tests_surface.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/windows/win32.zig"
+      },
+      {
+        "change": "modified",
+        "path": "src/windows/window.zig"
+      }
+    ]
+  },
+  "local_patches": [
+    "src/ui/d3d11.zig",
+    "src/ui/d3d11_texture.zig",
+    "src/ui/raster.zig",
+    "src/ui/shader.hlsl",
+    "src/ui/tests_d3d11.zig",
+    "src/ui/ui.zig",
+    "src/windows/app.zig",
+    "src/windows/surface_gpu.zig"
+  ],
+  "absorbed_pull_requests": [
+    71,
+    72,
+    75,
+    76
+  ],
+  "comparison": "source bytes with CRLF normalized to LF; provenance files excluded",
+  "checked_on": "2026-11-06"
+}

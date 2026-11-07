@@ -1,0 +1,18 @@
+.{
+    .name = .zgui,
+    .fingerprint = 0xe78160e64acbef8,
+    .version = "0.6.0-dev",
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "libs",
+        "src",
+        "README.md",
+        "LICENSE",
+    },
+    .dependencies = .{
+        .zglfw = .{ .path = "../zglfw" },
+        .system_sdk = .{ .path = "../system_sdk" },
+    },
+}
