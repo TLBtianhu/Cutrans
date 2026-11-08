@@ -434,6 +434,14 @@ pub fn openDocument(path: []const u8) !void {
     if (reply.status != abi.Status.ok) return error.DocumentOpenFailed;
 }
 
+pub fn jobsRead(allocator: std.mem.Allocator, after_id: u64) ![]u8 {
+    if (!initialized) return error.ShellNotInitialized;
+    var reply = try call(.jobs_read, after_id, &.{});
+    defer reply.deinit();
+    if (reply.status != abi.Status.ok or reply.value != 0 or reply.payload.len == 0 or reply.payload.len > 256 * 1024) return error.JobsReadFailed;
+    return allocator.dupe(u8, reply.payload);
+}
+
 pub fn api() abi.ShellApi {
     return .{
         .struct_size = @sizeOf(abi.ShellApi),

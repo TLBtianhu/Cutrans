@@ -67,6 +67,10 @@
 
 ## 最新实施记录
 
+- [2026-11-08 统一 NanoUI 前端与旧 UI 清理](docs/memory/2026-11-08-nanoui-unification.md)：主桌面、编辑器、资源库、CLI 与任务统一为 NanoUI；移除 zgui/zglfw/wgpu 与旧 CUI，保留 VM/Host 业务语义并补实际验证。
+
+- [2026-11-08 当前进度、遗留问题与后续顺序](docs/memory/2026-11-08-progress.md)：业务到C2c2，A／B主切片已验收、C未整体完成、D／E待办；集中登记工作正文、会话／求值、独立App、安全、安装、上游和缓存问题，下一片先做工作正文与固定版本分离。本次仅记忆归档。
+
 - [2026-11-07 自动化隐藏控制台与日志继承修复](docs/memory/2026-11-07-quiet-automation.md)
 - [2026-11-07 连续创作会话架构优化计划与A1／A2／B1／B2／C1／C2a实施](docs/memory/2026-11-07-architecture-plan.md)
 - [2026-11-06～07 开发、分发与本机安装测试隔离审计](docs/memory/2026-11-06-isolation.md)
@@ -85,3 +89,5 @@
 - [2026-11-07 仓库、README、生成物与GitHub源码交付整理](docs/memory/2026-11-07-repository-organization.md)：分类文档、隐藏开发入口、源码包守卫与缓存生成；保留旧输出内数据／证据，Git历史未改写或推送。
 
 - [2026-11-07 用户授权的公开历史重置与旧发布撤下](docs/memory/2026-11-07-public-history-reset.md)：验收树建立新根、逐ref lease原子推送、私有bundle及旧发布资产校验备份；用户指定fork保持原样。
+
+- [2026-11-07 构建缓存盘点与用户授权清理](docs/memory/2026-11-07-cache-cleanup.md)：精确删除67.327GiB编译缓存及异常递归副本，目录由75.339降至8.013GiB；产物、数据、全部验收证据与私有备份保留。缓存自动治理及递归副本起因仍未解决。

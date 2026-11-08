@@ -15,7 +15,6 @@ REQUIRED_FILES = [
     "config/startup.ccb",
     "assets/examples/minimal.cut",
     "assets/examples/pngtest.png",
-    "wgpu_native.dll",
     "cutrans_vm_host.exe",
     "cutrans_shell.exe",
 ]
@@ -63,7 +62,7 @@ def main() -> None:
         "host_api": host_api(),
         "document_schema": 3,
         "required_capabilities": capability_ids(),
-        "native_dependencies": [{"id": "wgpu-native", "abi": args.abi, "path": "wgpu_native.dll"}],
+        "native_dependencies": [],
         "files": [file_record(root, relative) if relative != "cutrans-context.json" or args.context is None else {
             "path": relative, "byteLength": args.context.stat().st_size,
             "sha256": hashlib.sha256(args.context.read_bytes()).hexdigest(),

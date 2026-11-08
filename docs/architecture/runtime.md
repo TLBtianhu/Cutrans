@@ -14,7 +14,7 @@ Cutrans 的核心不是复制一个传统剪辑器，而是建立一个**声明�
 2. **声明唯一真源，一切皆投影**：文档、任务和视图状态不依赖某个界面；`.cut` 是可读、可 diff、可恢复的文本声明。
 3. **机制与策略分家**：协议定义“做什么”，插件和 OS Port 决定“如何执行”。
 
-当前实例化RuntimeContext，支持Surface的full／dock／floating、焦点与命中、系统任务栏、CCB启动清单和CUI视图声明。桌面、CLI、编辑器和资源管理器按App分责，不要求每个App独立进程。
+当前实例化RuntimeContext，支持Surface的full／dock／floating、焦点与命中、系统任务栏和CCB启动清单。主桌面已统一为NanoUI页面投影，旧CUI已移除；桌面、CLI、编辑器和资源管理器按App分责，不要求每个App独立进程。
 
 `.cut v3`描述图像DAG，支持resolution、fps、testsrc、gain、invert、over、image、resize与显式output。规范身份`Birth{inspire,transform,aggregate}`和聚合参数`AggIn{x,y,opacity,t}`进入规范化文本；指纹使用固定宽度、小端整数及明确浮点位模式。v1／v2仍可读并迁移。
 
@@ -50,13 +50,13 @@ owned及已采用版本保存在`library/versions/<id>/<sha>.bin`，旧`library/
 
 ## 独立 VM Runtime（第一阶段已实现）
 
-`zig-out/vm-runtime/` 是独立、可装载的 Runtime Pack，包含 `cutrans_vm_runtime.dll`、启动清单、示例与许可证；`runtime-pack.json` 记录 OS/CPU ABI、入口、三种 schema、7 项能力及实际载荷文件的大小和 SHA-256。核心不依赖 wgpu，GUI 原生依赖属于独立 Shell Pack。
+`zig-out/vm-runtime/` 是独立、可装载的 Runtime Pack，包含 `cutrans_vm_runtime.dll`、启动清单、示例与许可证；`runtime-pack.json` 记录 OS/CPU ABI、入口、三种 schema、7 项能力及实际载荷文件的大小和 SHA-256。核心不依赖旧 wgpu/zgui 栈，NanoUI 原生依赖属于独立 Shell Pack。
 
 `cutrans_bootstrap` 在加载前校验清单与文件，经 LibraryPort 显式装载 DLL，再执行能力握手和文档命令。默认 Runtime 位置由 context 形态决定：开发输出根的 `vm-runtime/`、便携根的 `runtime/`、安装根的 `runtime-envs/default/`，不从 cwd/PATH 猜库。`--diag --data=<独立绝对路径>` 验证保存与另一实例恢复；`--headless --open <绝对路径> --purpose=verification --data=<独立绝对路径>` 只读外部原件，将规范化副本保存到验证 Session，再验证恢复。
 
-`bootstrap/activation.zig` 统一无头诊断、回放、旧桌面入口和独立 Host 的 Runtime 激活顺序：完整性与选择锁检查 → 从当前根解析 Pack → 真实创建与 ABI/能力握手 → 文档恢复、回放或保存/恢复诊断 → 再次校验完整性 → 原子提交选择。缺文件、ABI 不符、创建失败或握手失败都不会改写原有锁。选择锁不含宿主绝对路径，`verify-runtime` 包含完整人工安装布局移动后的资源重定位用例；这不等于迁移 Windows 登记，真实安装根移动仍需处理快捷方式和关联。`activate-runtime` 只在 Host 已停止后校验候选并提交 Runtime 锁，不能证明程序文件复制和登记具备升级事务。
+`bootstrap/activation.zig` 统一无头诊断、回放、NanoUI 桌面入口和独立 Host 的 Runtime 激活顺序：完整性与选择锁检查 → 从当前根解析 Pack → 真实创建与 ABI/能力握手 → 文档恢复、回放或保存/恢复诊断 → 再次校验完整性 → 原子提交选择。缺文件、ABI 不符、创建失败或握手失败都不会改写原有锁。选择锁不含宿主绝对路径，`verify-runtime` 包含完整人工安装布局移动后的资源重定位用例；这不等于迁移 Windows 登记，真实安装根移动仍需处理快捷方式和关联。`activate-runtime` 只在 Host 已停止后校验候选并提交 Runtime 锁，不能证明程序文件复制和登记具备升级事务。
 
-`zig-out/vm-shell/` 包含 `cutrans_desktop.dll`、wgpu 和桌面资源；`shell-pack.json` 使用 `cutrans-shell-pack/1`，审计实际载荷文件。默认 `--open` 会完成 `Bootstrap → VM → Shell → doc.open → editor`，GUI 文档命令全部转发给 VM，界面只接收经过指纹校验的文档镜像。`cutrans_vm.exe` 是 Bootstrap 薄入口，也提供新的 Host 控制命令。
+`zig-out/vm-shell/` 包含 `cutrans_shell.exe` 和桌面资源；`shell-pack.json` 使用 `cutrans-shell-pack/1`，审计实际载荷文件。默认 `--open` 会完成 `Bootstrap → VM → Shell → doc.open → editor`，GUI 文档命令全部转发给 VM，界面只接收经过指纹校验的文档镜像。主桌面统一使用 NanoUI，包含首页、编辑器、资源库、CLI 和任务视图；`cutrans_vm.exe` 是 Bootstrap 薄入口，也提供新的 Host 控制命令。
 
 ## Host生命周期
 
@@ -69,11 +69,11 @@ owned及已采用版本保存在`library/versions/<id>/<sha>.bin`，旧`library/
 - 未正常停止的实例下次启动会标记 `last_shutdown_abnormal=1`，并继续增加 `boot_id`；正常停止后该标记清零。`restart` 必须先正常停止再启动。
 - `verify-host` 覆盖重复启动、第二 Host 和旧入口拒绝、幂等停止、保存失败重试、异常终止恢复及暂存目录纯净。人工 installed 布局与真实系统安装的验收须分别记录。
 
-`cutrans_vm.exe attach` 和独立 `cutrans_shell.exe` 已实现第一阶段 Shell 附着：ShellApi 经版本化 RPC 转发到 Host，关闭 Shell 不会销毁 Runtime，重开可恢复文档、目录和 Station。`shell_handshake` 只做身份与选择预检；前端正常返回并再次通过清单校验后，`shell_commit` 才原子更新选择锁。启动失败或异常终止不会提交 Shell，外部文档仍由 Host 授权打开。`status` 同时返回真实 `present_count`，`verify-attach` 据此验证普通启动、素材和播放，而不依赖同进程日志。默认 `cutrans_vm.exe` 与 `desktop` 都会启动或复用 Host，再显式附着桌面；不再创建第二个进程内 Runtime。低级附着使用 `attach` 或 `cutrans_shell.exe`，`library` 仅作为 NanoUI 的开发诊断入口。无头诊断与回放仍使用独立 Runtime，并拒绝成为 Host 的第二写者。Host已有独立导出作业驱动；正式控制台UI、自动断线重连和完整任务GUI尚未实现。
+`cutrans_vm.exe attach` 和独立 `cutrans_shell.exe` 已实现第一阶段 Shell 附着：ShellApi 经版本化 RPC 转发到 Host，关闭 Shell 不会销毁 Runtime，重开可恢复文档、目录和 Station。`shell_handshake` 只做身份与选择预检；前端正常返回并再次通过清单校验后，`shell_commit` 才原子更新选择锁。启动失败或异常终止不会提交 Shell，外部文档仍由 Host 授权打开。`status` 同时返回真实 `present_count`，`verify-attach` 据此验证普通启动、素材和播放，而不依赖同进程日志。默认 `cutrans_vm.exe` 与 `desktop` 都会启动或复用 Host，再显式附着桌面；不再创建第二个进程内 Runtime。低级附着使用 `attach` 或 `cutrans_shell.exe`，`library` 仅作为 NanoUI 的开发诊断入口。无头诊断与回放仍使用独立 Runtime，并拒绝成为 Host 的第二写者。Host已有独立导出作业驱动；统一 NanoUI 控制台和任务分页已接入，自动断线重连尚未实现。
 
 ## 帧与播放
 
-FrameSink 将预览 `offer`、GPU `submitted`、内容 `underflow` 和输出 `unavailable` 分开记录。Shell 在纹理更新、帧获取与 `wgpuSurfacePresent` 成功后，才把带文档指纹的提交回执交给 VM；陈旧指纹会被拒绝。`verify-shell` 通过提交日志或 Host 状态验证，历史安装探针也读取过 `CUTRANS_FRAME_PRESENT_OK`；本轮安装包预检没有 GUI 提交验收。这类回执只证明 GPU 提交成功，不代表已观察到屏幕扫描完成或获得精确呈现时间。
+FrameSink 将预览 `offer`、GPU `submitted`、内容 `underflow` 和输出 `unavailable` 分开记录。Shell 在 NanoUI 纹理同步与 swap-chain present 成功后，才通过 `on_present` 把带文档指纹的提交回执交给 VM；陈旧指纹会被拒绝。`verify-shell` 通过提交日志或 Host 状态验证，历史安装探针也读取过 `CUTRANS_FRAME_PRESENT_OK`；本轮安装包预检没有 GUI 提交验收。这类回执只证明 GPU 提交成功，不代表已观察到屏幕扫描完成或获得精确呈现时间。
 
 `runtime/playback.zig` 持有每实例的静态文档流、游标、截止时间和就绪帧。首帧预取完成后才启动首个截止时间，之后同步预取下一帧；缓存命中不刷新物化时间，到点未物化才记 `underflow` 并跳过。`document_commands.pump` 驱动 `playback.start/status/stop`。`PlaybackReport` 提供游标、帧数、offer、欠账和独立的生产 `last_t`，不受静态预览候选影响。`vne/playback.zig` 的只读 View 计算当前帧，编辑器显示静态序列播放头并以 `offerAt` 上报；`--playback=N` 在桌面与 GPU 就绪后启动。`verify-playback` 验证真实时钟，`verify-shell` 必须读到 `CUTRANS_PLAYBACK_SUBMIT_OK t=3`；这是有限静态序列及投影，不是视频、音频、后台解码或视觉/手感验收。
 
@@ -90,7 +90,7 @@ FrameSink 将预览 `offer`、GPU `submitted`、内容 `underflow` 和输出 `un
 
 独立Runtime的窄C ABI只传固定版本配置、字节切片、不透明句柄、整数状态和文档指纹；`RuntimeContext`、`std.Io`、分配器和Zig对象布局由DLL持有，不跨边界暴露。实例在VM自有的4MiB启动线程中同步构造，该构造线程随后结束；命令owner和导出worker另外持续运行，不能由构造线程生命周期推断没有后台驱动。History恢复状态在堆上持有，调用方无需承担内部Zig大栈要求。
 
-**语义 ABI 与 C/C++ ABI 分家**：`.cut`、CCB/CUI、Task、History 和 VM Pack 不继承 C++ 对象布局、虚表、RTTI、STL 或异常模型，只承诺固定宽度、端序、长度、数量、版本、id、引用和生命周期。OS、CPU 和原生库的 ABI 则只留在窄 Port 中，并经过布局与真实能力自检。
+**语义 ABI 与 C/C++ ABI 分家**：`.cut`、CCB、Task、History 和 VM Pack 不继承 C++ 对象布局、虚表、RTTI、STL 或异常模型，只承诺固定宽度、端序、长度、数量、版本、id、引用和生命周期。OS、CPU 和原生库的 ABI 则只留在窄 Port 中，并经过布局与真实能力自检。
 
 `ProcessPort` 的 Job Object 是进程树资源管理边界，**不是安全沙箱**；`vm-pack.json` 也只是兼容性与依赖清单，**不是签名系统、安装器或回滚系统**。Runtime 与 Bootstrap 同进程运行，同样不构成不可信代码隔离。
 

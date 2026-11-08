@@ -451,6 +451,7 @@ pub fn register(ctx: *RuntimeContext) !void {
         "playback.stop",
         "asset.open",
         "asset.ensure",
+        "resource.acquire",
         "asset.check",
         "asset.preview",
         "asset.export",

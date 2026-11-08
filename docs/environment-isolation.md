@@ -44,12 +44,12 @@ Pack 的 `pack://` 是只读输入；Session、持久资源库、可重建缓存
 | `cutrans_bootstrap.exe` | headless、诊断与回放；共享同一解析，写入必须显式独立数据 |
 | `cutrans_vm_host.exe` | 独立后台 Host；相同实例标记、规范路径、锁与 Runtime 校验 |
 | `cutrans_shell.exe`、`cutrans_library_nanoui.exe` | 附着同一 Host；先校验 Shell，成功后才提交选择；启动子进程固定 cwd 为程序目录 |
-| `cutrans_desktop.dll`、Runtime DLL | 经显式绝对 Pack 路径和 ABI 配置进入；DLL 搜索只允许所选目录及 System32 |
+| `cutrans_shell.exe`、`cutrans_library_nanoui.exe`、Runtime DLL | Shell 经显式绝对 Pack 路径和 ABI 配置进入；Runtime DLL 搜索只允许所选目录及 System32 |
 | `cutrans_diag.exe` | `--inspect` 只读；写入探针强制 `--verify-data-dir`，验证 Pack 后才建独立实例，不写 Pack 或外部原件 |
 | Web、更新器、账号与遥测 | 当前没有单独产品 Web/更新/账号/遥测入口；NanoUI 关闭 WebView2 和隐式 KV。context 启用未配置服务会被拒绝 |
 | 安装器、生成卸载器 | 产品声明生成身份；先核验所有权、真实路径、进程状态并备份要改的登记和快捷方式 |
 
-ImGui 的默认 `imgui.ini` 持久化已关闭。第三方源码中的演示应用、服务能力或默认设置不等于本产品公开入口。
+主桌面已统一为 NanoUI，旧 ImGui 栈不再参与产品；NanoUI 隐式 KV 持久化关闭。第三方源码中的演示应用、服务能力或默认设置不等于本产品公开入口。
 
 直接 C ABI 的 `Config` 是受信任调用方传入的资源／数据契约，底层检查物理路径分离；它没有自行推断发布频道或用途的能力。这里的完整身份检查覆盖公开 EXE 与其启动链，不能据此宣称任意外部 ABI 客户端或不可信插件已受隔离沙箱保护。
 

@@ -1,8 +1,10 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const abi = @import("vne").abi;
-const State = @import("nanoui_model.zig").State;
+pub const State = @import("nanoui_model.zig").State;
 const library_view = @import("nanoui_view.zig");
+pub const view = library_view.view;
+pub const metalTheme = library_view.metalTheme;
 
 fn requiredPath(value: abi.ByteSlice) ![]const u8 {
     if (value.len == 0 or value.ptr == null) return error.InvalidPath;
@@ -19,7 +21,7 @@ fn hasVisibleContent(pixels: []const u8) bool {
     return false;
 }
 
-fn verifyD3D(tester: *nanoui.ui.Tester, allocator: std.mem.Allocator) !void {
+pub fn verifyD3D(tester: *nanoui.ui.Tester, allocator: std.mem.Allocator) !void {
     if (@import("builtin").os.tag != .windows) return;
     var renderer = try nanoui.ui.d3d11.Renderer.init();
     defer renderer.deinit();
@@ -46,7 +48,7 @@ const DynamicScene = struct {
     }
 };
 
-fn verifyDynamicD3D(allocator: std.mem.Allocator) !void {
+pub fn verifyDynamicD3D(allocator: std.mem.Allocator) !void {
     var bytes: [40]u8 = @splat(0);
     const colors = [_][4]u8{
         .{ 20, 40, 80, 255 },

@@ -18,7 +18,7 @@ $diagnosticData = Join-Path ([IO.Path]::GetTempPath()) ("Cutrans-diagnostic-" + 
 .\cutrans_diag.exe "--verify-data-dir=$diagnosticData"
 ```
 
-便携版包含运行所需的 wgpu-native DLL 和第三方许可证，不依赖源码目录，不写注册表。日常文档、History、任务账本和导出默认写在程序旁的 `data/`；诊断目录不得与它重叠。`--open` 诊断只读原件，并在验证 Session 中保存副本。升级应用文件时应保留日常 `data/`。
+便携版包含运行所需的 NanoUI 原生组件、stb 图像编解码和第三方许可证，不依赖源码目录，不写注册表。日常文档、History、任务账本和导出默认写在程序旁的 `data/`；诊断目录不得与它重叠。`--open` 诊断只读原件，并在验证 Session 中保存副本。升级应用文件时应保留日常 `data/`。
 
 源码提供 `Cutrans-Setup-0.1.0-windows-x64.exe` 的构建流程；历史早期便携 Release 不包含安装器，不能用当前源码说明推断其能力。安装版的声明形态为 `installed`，用户数据位于安装根的 `data/`，默认卸载保留。文件关联只在 `.cut` 未被其他应用占用时创建。变更程序资产的覆盖升级与旧数据迁移目前关闭。
 
@@ -37,27 +37,25 @@ $diagnosticData = Join-Path ([IO.Path]::GetTempPath()) ("Cutrans-diagnostic-" + 
 
 可用`.\cutrans_vm.exe jobs --mode=portable`查询Host作业。start幂等；stop先保存，保存失败进入degraded并保留Host供重试；restart先正常停止再启动。异常退出会在下次启动标记，不能以删锁或强杀代替正常停止。
 
-## 可选NanoUI Shell
+## 统一 NanoUI 桌面与可选资源库诊断
 
-`cutrans_library_nanoui.exe` 是不经过旧 GUI DLL 的独立前端，经 `bootstrap.runAttached` 复用 Host 预检、RPC 和成功后的选择提交。`zig-out/nanoui-library/` 是独立 Shell Pack，包含入口 EXE、示例和许可证；便携版放在根内 `nanoui-library/`，安装版放在 `shells/nanoui-library/`。默认桌面仍是 desktop，只有显式选择并成功运行 NanoUI 后才更新 Shell 锁。旧桌面与新前端共用 `shell/mirror.zig` 的目录、Asset 和完整 PNG 投影。
+默认 `cutrans_shell.exe` 是统一 NanoUI 桌面，包含首页、编辑器、资源库、CLI 和任务视图。主桌面不再使用 zgui、GLFW、wgpu-native、ImGui 或 CUI；编辑、资源、作业和 Host 协议保持不变。`--assets-demo` 会在真实 Host 上完成无窗口场景并返回实际退出码。
 
-NanoUI EXE 是内部 Shell 组件，不是第二个产品。日常只有一个 `Cutrans` 桌面入口，资源库由桌面内部的 VM App 打开；安装版也只创建一个开始菜单入口：
+`cutrans_library_nanoui.exe` 仍是可选的独立资源库诊断 Shell，经 `bootstrap.runAttached` 复用 Host 预检、RPC 和成功后的选择提交。`zig-out/nanoui-library/` 是其独立 Shell Pack，便携版放在根内 `nanoui-library/`，安装版放在 `shells/nanoui-library/`。它是内部组件，不是第二个产品；日常只有一个 `Cutrans` 桌面入口。
 
-开发态候选前端的以下命令仅在源码根执行；先按[构建指南](../development/building.md)生成Pack：
+开发态可显式使用以下命令，先按[构建指南](../development/building.md)生成Pack：
 
 ```powershell
-.\tools\dev.ps1 build nanoui-library-pack
+.\tools\dev.ps1 build shell-pack nanoui-library-pack
 .\zig-out\bin\cutrans_vm.exe library --mode=development
-# 需要显式返回桌面时：
+# 需要显式返回统一桌面时：
 .\zig-out\bin\cutrans_vm.exe desktop --mode=development
 .\zig-out\bin\cutrans_vm.exe stop --mode=development
 ```
 
-`library --assets-demo` 会等待无头前端完成并返回真实退出码。日常默认启动和 `.cut` 打开则统一走 Host＋desktop，不要求用户理解内部 EXE 或填写 Pack 路径。
-
 子目录 Shell 会从已验证的安装根或便携根解析同一个 `data/`，不会在自己的 Pack 内写数据。高级诊断仍可使用 `--shell-dir=<绝对路径>` 选择候选 Pack；它只在本次成功后迁移 Shell 锁。
 
-当前界面提供逻辑树、原生PNG导入、完整预览、来源核对、独立化、移动、新建文件夹及中文重命名。通用登记底层可以管理TXT／未知格式／空文件，不表示现有GUI能预览或编辑它们；完整来源浏览App、目录provider、可变正文、真实音视频仍未实现。见[资源契约](../resource-operations.md)。
+当前界面提供文档编辑、PNG预览与导出、逻辑资源树、原生PNG导入、来源核对、独立化、移动、新建文件夹、中文重命名、CLI和任务分页。通用登记底层可以管理TXT／未知格式／空文件，不表示现有GUI能预览或编辑它们；完整来源浏览App、目录provider、可变正文、真实音视频仍未实现。见[资源契约](../resource-operations.md)。
 
 ## 运行数据与安装边界
 

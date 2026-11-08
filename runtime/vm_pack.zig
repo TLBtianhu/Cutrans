@@ -85,7 +85,6 @@ fn verifyFiles(manifest: Manifest, allocator: std.mem.Allocator, io: std.Io, dir
         "config/startup.ccb",
         "assets/examples/minimal.cut",
         "assets/examples/pngtest.png",
-        "wgpu_native.dll",
     };
     for (required_paths) |required| {
         var found = false;
@@ -94,11 +93,10 @@ fn verifyFiles(manifest: Manifest, allocator: std.mem.Allocator, io: std.Io, dir
         }
         if (!found) return error.MissingPackFile;
     }
-    if (manifest.native_dependencies.len != 1) return error.NativeDependencyMismatch;
-    const native = manifest.native_dependencies[0];
-    if (!std.mem.eql(u8, native.id, "wgpu-native")) return error.NativeDependencyMismatch;
-    if (!std.mem.eql(u8, native.abi, currentNativeAbi())) return error.IncompatibleNativeDependency;
-    if (!std.mem.eql(u8, native.path, "wgpu_native.dll")) return error.NativeDependencyMismatch;
+    for (manifest.native_dependencies) |native| {
+        if (!std.mem.eql(u8, native.abi, currentNativeAbi())) return error.IncompatibleNativeDependency;
+        if (!validRelative(native.path)) return error.NativeDependencyMismatch;
+    }
 
     for (manifest.files, 0..) |file, i| {
         if (!validRelative(file.path)) return error.InvalidPackPath;
@@ -167,7 +165,6 @@ fn prepareFiles(dir: std.Io.Dir) !void {
     try writeTestFile(dir, "config/startup.ccb", "a");
     try writeTestFile(dir, "assets/examples/minimal.cut", "b");
     try writeTestFile(dir, "assets/examples/pngtest.png", "c");
-    try writeTestFile(dir, "wgpu_native.dll", "d");
     try writeTestFile(dir, "cutrans_vm_host.exe", "e");
     try writeTestFile(dir, "cutrans_shell.exe", "f");
 }
@@ -193,26 +190,24 @@ test "VM pack JSON and file hashes verify against real files" {
     const a = hashText("a");
     const b = hashText("b");
     const c = hashText("c");
-    const d = hashText("d");
     const e = hashText("e");
     const f = hashText("f");
     const files = [_]PackFile{
         .{ .path = "config/startup.ccb", .byteLength = 1, .sha256 = &a },
         .{ .path = "assets/examples/minimal.cut", .byteLength = 1, .sha256 = &b },
         .{ .path = "assets/examples/pngtest.png", .byteLength = 1, .sha256 = &c },
-        .{ .path = "wgpu_native.dll", .byteLength = 1, .sha256 = &d },
         .{ .path = "cutrans_vm_host.exe", .byteLength = 1, .sha256 = &e },
         .{ .path = "cutrans_shell.exe", .byteLength = 1, .sha256 = &f },
     };
-    const native = [_]NativeDependency{.{ .id = "wgpu-native", .abi = currentNativeAbi(), .path = "wgpu_native.dll" }};
-    const manifest = testManifest(&files, &native, &required_ids);
+    const no_native = [_]NativeDependency{};
+    const manifest = testManifest(&files, &no_native, &required_ids);
     const json = try std.fmt.allocPrint(std.testing.allocator, "{f}", .{std.json.fmt(manifest, .{})});
     defer std.testing.allocator.free(json);
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = manifest_path, .data = json });
     const report = try verifyFile(std.testing.allocator, std.testing.io, tmp.dir);
     try std.testing.expectEqual(@as(usize, 7), report.capabilities);
-    try std.testing.expectEqual(@as(usize, 6), report.files);
-    try std.testing.expectEqual(@as(usize, 1), report.native_dependencies);
+    try std.testing.expectEqual(@as(usize, 5), report.files);
+    try std.testing.expectEqual(@as(usize, 0), report.native_dependencies);
 }
 
 test "VM pack rejects hash drift incompatible ABI and unknown capabilities" {
@@ -222,7 +217,6 @@ test "VM pack rejects hash drift incompatible ABI and unknown capabilities" {
     const a = hashText("a");
     const b = hashText("b");
     const c = hashText("c");
-    const d = hashText("d");
     const e = hashText("e");
     const f = hashText("f");
     const zeros = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -230,18 +224,17 @@ test "VM pack rejects hash drift incompatible ABI and unknown capabilities" {
         .{ .path = "config/startup.ccb", .byteLength = 1, .sha256 = zeros },
         .{ .path = "assets/examples/minimal.cut", .byteLength = 1, .sha256 = &b },
         .{ .path = "assets/examples/pngtest.png", .byteLength = 1, .sha256 = &c },
-        .{ .path = "wgpu_native.dll", .byteLength = 1, .sha256 = &d },
         .{ .path = "cutrans_vm_host.exe", .byteLength = 1, .sha256 = &e },
         .{ .path = "cutrans_shell.exe", .byteLength = 1, .sha256 = &f },
     };
-    const native = [_]NativeDependency{.{ .id = "wgpu-native", .abi = currentNativeAbi(), .path = "wgpu_native.dll" }};
-    try std.testing.expectError(error.PackFileHashMismatch, verify(testManifest(&files, &native, &required_ids), std.testing.allocator, std.testing.io, tmp.dir));
+    const no_native = [_]NativeDependency{};
+    try std.testing.expectError(error.PackFileHashMismatch, verify(testManifest(&files, &no_native, &required_ids), std.testing.allocator, std.testing.io, tmp.dir));
 
-    const incompatible = [_]NativeDependency{.{ .id = "wgpu-native", .abi = "incompatible-os", .path = "wgpu_native.dll" }};
+    const incompatible = [_]NativeDependency{.{ .id = "optional-native", .abi = "incompatible-os", .path = "optional.dll" }};
     try std.testing.expectError(error.IncompatibleNativeDependency, verify(testManifest(&files, &incompatible, &required_ids), std.testing.allocator, std.testing.io, tmp.dir));
 
     var unknown = required_ids;
     unknown[0] = "video.decode";
-    try std.testing.expectError(error.CapabilityNotReady, verify(testManifest(&files, &native, &unknown), std.testing.allocator, std.testing.io, tmp.dir));
+    try std.testing.expectError(error.CapabilityNotReady, verify(testManifest(&files, &no_native, &unknown), std.testing.allocator, std.testing.io, tmp.dir));
     _ = a;
 }

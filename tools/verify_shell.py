@@ -1,4 +1,4 @@
-"""Start the desktop through the VM and verify logs without visual or input automation."""
+"""Start the NanoUI desktop through the VM and verify logs without visual or input automation."""
 
 from __future__ import annotations
 
@@ -21,15 +21,15 @@ SHELL_FRAME = re.compile(r"^CUTRANS_SHELL_FRAME_OK generation=([1-9][0-9]*) cont
 
 
 def submitted_times(text: str) -> set[int]:
-    # These records follow backend submission and a successful FrameReport RPC.
-    # A playback mirror/cursor record or an independent Host log is insufficient.
+    # These records follow a successful GPU present or offscreen D3D render and
+    # a successful FrameReport RPC. A playback mirror or Host log is insufficient.
     return {int(match.group(3)) for match in SHELL_FRAME.finditer(text)}
 
 
 def start_and_verify(bootstrap: Path, document: Path, data: Path, mode: str, cleanup: bool = True, playback_frames: int | None = None, assets_demo: bool = False, settle_seconds: float = 0.0, cwd: Path | None = None) -> None:
     gui_cwd = ensure_owned_data(cwd if cwd is not None else data.parent / f"{data.name} gui-cwd")
-    ini = check_root(gui_cwd / "imgui.ini")
-    ini_before = (ini.read_bytes(), ini.stat().st_mtime_ns) if ini.exists() else None
+    legacy_ini = check_root(gui_cwd / "imgui.ini")
+    ini_before = (legacy_ini.read_bytes(), legacy_ini.stat().st_mtime_ns) if legacy_ini.exists() else None
     host_console = bootstrap if bootstrap.name == "cutrans_vm.exe" else None
     if host_console is not None:
         started = automation_process.run(command_args([str(host_console), "start", f"--mode={mode}", f"--data={data}"]), cwd=gui_cwd, capture_output=True, text=True)
@@ -59,9 +59,10 @@ def start_and_verify(bootstrap: Path, document: Path, data: Path, mode: str, cle
     assets_ready = not assets_demo
     ready_at: float | None = None
     settled = False
+    natural_exit: int | None = None
     try:
         deadline = time.time() + 90
-        while time.time() < deadline and process.poll() is None:
+        while time.time() < deadline:
             text = "".join(lines)
             frame_times = submitted_times(text)
             ready = ready or "Cutrans VM 桌面就绪" in text
@@ -76,9 +77,14 @@ def start_and_verify(bootstrap: Path, document: Path, data: Path, mode: str, cle
                 if time.time() - ready_at >= settle_seconds:
                     settled = True
                     break
-            time.sleep(0.1)
+            natural_exit = process.poll()
+            if natural_exit is not None and not (ready and editor and frame and playback_ready and assets_ready):
+                thread.join(timeout=2)
+                natural_exit = None
+                continue
+            time.sleep(0.05)
         if not (ready and editor and frame and playback_ready and assets_ready and settled):
-            raise RuntimeError("desktop shell or projected frame submission did not become ready: " + "".join(lines))
+            raise RuntimeError("NanoUI desktop or projected frame submission did not become ready: " + "".join(lines))
     finally:
         if process.poll() is None:
             process.terminate()
@@ -96,10 +102,12 @@ def start_and_verify(bootstrap: Path, document: Path, data: Path, mode: str, cle
                 raise RuntimeError("could not stop the Host used by the desktop probe: " + stopped.stdout + stopped.stderr)
         if cleanup:
             retain(data)
-        ini_after = (ini.read_bytes(), ini.stat().st_mtime_ns) if ini.exists() else None
+        ini_after = (legacy_ini.read_bytes(), legacy_ini.stat().st_mtime_ns) if legacy_ini.exists() else None
         if ini_after != ini_before:
-            raise RuntimeError(f"GUI created or modified cwd/imgui.ini; evidence retained: {ini}")
-    print(f"CUTRANS_SHELL_CWD_OK ini={'absent' if ini_before is None else 'unchanged'}")
+            raise RuntimeError(f"desktop created or modified an implicit legacy UI state file: {legacy_ini}")
+    if natural_exit is not None and natural_exit != 0:
+        raise RuntimeError(f"NanoUI desktop exited with code {natural_exit}: " + "".join(lines))
+    print(f"CUTRANS_SHELL_CWD_OK implicit_ui_state={'absent' if ini_before is None else 'unchanged'}")
     if assets_demo:
         print("CUTRANS_SHELL_ASSETS_VERIFY_OK selected=1 preview=1 inserted=1 visual_acceptance=not_run")
     elif playback_frames is None:
@@ -124,19 +132,17 @@ def main() -> None:
         raise RuntimeError("missing shell fell back to another host or created user data")
     print("CUTRANS_SHELL_MISSING_OK fallback=0 data_created=0")
     data = root / "shell data"
-    empty_cwd = ensure_owned_data(root / "cwd without ini")
-    # Dear ImGui's default save timer is five seconds. Keep the real GUI alive
-    # beyond it so an accidental return to implicit cwd persistence is detected.
-    start_and_verify(bootstrap, document, data, "portable", cleanup=False, settle_seconds=6.0, cwd=empty_cwd)
+    empty_cwd = ensure_owned_data(root / "cwd without implicit ui state")
+    start_and_verify(bootstrap, document, data, "portable", cleanup=False, settle_seconds=0.5, cwd=empty_cwd)
     lock_text = (data / "session/runtime.lock").read_text(encoding="utf-8")
     if "runtime_id=cutrans-vm" not in lock_text or "shell_id=" in lock_text:
         raise RuntimeError("an abruptly terminated desktop changed the committed Shell selection")
     if "C:\\" in lock_text or root.as_posix() in lock_text:
         raise RuntimeError("shell selection lock leaked a host path")
     print("CUTRANS_SHELL_LOCK_OK runtime=1 shell_uncommitted_after_abnormal=1 host_path=0")
-    existing_cwd = ensure_owned_data(root / "cwd existing ini")
+    existing_cwd = ensure_owned_data(root / "cwd existing legacy ui state")
     (existing_cwd / "imgui.ini").write_bytes(b"; Cutrans verification sentinel: preserve unchanged.\n[Window][Cutrans verification]\nPos=123,234\nSize=321,234\nCollapsed=0\n")
-    start_and_verify(bootstrap, document, root / "playback data", "portable", cleanup=False, playback_frames=4, settle_seconds=6.0, cwd=existing_cwd)
+    start_and_verify(bootstrap, document, root / "playback data", "portable", cleanup=False, playback_frames=4, settle_seconds=0.5, cwd=existing_cwd)
     start_and_verify(bootstrap, document, root / "asset data", "portable", cleanup=False, assets_demo=True)
     retain(root)
 

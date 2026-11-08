@@ -15,8 +15,6 @@ cd Cutrans
 `tools/bootstrap.py` 只使用 Python 标准库，按固定 URL 与 SHA-256 校验并恢复：
 
 - Zig `0.17.0`：官方 `zig-x86_64-windows-0.17.0.zip`，编译器与 `lib/` 从同一校验过的压缩包恢复到 `tools/zig/`，整套工具链不进入源码仓库。
-- wgpu-native `v29.0.1.1`：官方 `wgpu-windows-x86_64-msvc-release.zip`，安装到 `third_party/wgpu/lib/`。
-- zig-gamedev system_sdk 固定提交中的 `dxguid.lib`。
 - NanoUI 所需的 `http-zig` 固定提交：校验归档 SHA-256 和 Zig 规范包哈希后恢复本地源码缓存，避免首次构建依赖 Git 远端发现。
 - 可选的 Inno Setup `7.1.1` x64：仅在构建安装器时通过 `--installer-tool` 恢复，以官方 `/PORTABLE=1` 模式放进 `tools/InnoSetup/`，不创建编译器的注册表关联或卸载项。
 
@@ -31,7 +29,7 @@ cd Cutrans
 
 默认 Windows x64 构建固定为 `x86_64_v2`，避免开发机指令集意外进入分发物；开发者可用 `-Dcpu=native` 做本机构建，但不能用它替代分发基线验收。尚未在只支持更早指令集的 CPU 上实机验证。
 
-NanoUI `0.12.0`（fork `00e5813`）的固定源码副本位于 `third_party/nanoui/`，来源提交、许可证和补丁策略见其中的 `VENDOR.md`。它是 Cutrans 独立维护的物理副本，不与 OTTO 共用工作区，也不依赖本机 `C:\src` 路径。独立资源管理器切片已经落地，现有分发 GUI 仍是 zgui/wgpu，NanoUI 已作为可选 Shell 进入便携版与安装版；接入时关闭 WebView2。通用改进经完整测试后少量、分批反哺上游，不为每次小编辑频繁提交 PR。
+NanoUI `0.12.0`（fork `00e5813`）的固定源码副本位于 `third_party/nanoui/`，来源提交、许可证和补丁策略见其中的 `VENDOR.md`。它是 Cutrans 独立维护的物理副本，不与 OTTO 共用工作区，也不依赖本机 `C:\src` 路径。主桌面已统一为 NanoUI，包含首页、编辑器、资源库、CLI 和任务视图；独立资源库诊断 Shell 保留，旧 zgui/zglfw/wgpu 与 CUI 已移除。接入时关闭 WebView2。通用改进经完整测试后少量、分批反哺上游，不为每次小编辑频繁提交 PR。
 
 依赖源码基线由 `dependencies.lock.json` 固定。`python tools/dependency_audit.py` 验证有效源码树；来源提交缺失的旧 vendor 明确标为旧快照，不伪造上游身份。更新必须同时审查官方→fork→Cutrans 的差异，再显式更新锁。
 
@@ -48,7 +46,7 @@ NanoUI `0.12.0`（fork `00e5813`）的固定源码副本位于 `third_party/nano
 | 用途 | build后的目标 |
 | --- | --- |
 | 纯语义／模型 | `test-core -Dcore-only=true`、`test` |
-| NanoUI源码／前端编译 | `test-nanoui`、`test-nanoui-library` |
+| NanoUI源码／前端编译 | `test-nanoui`、`test-nanoui-desktop`、`test-nanoui-library` |
 | 分发组装 | `install`、`portable`、`runtime-pack`、`shell-pack`、`nanoui-library-pack`、`library-probe` |
 | 文档／作业实际产物 | `verify-edit-commit`、`verify-workspace`、`verify-workspace-rpc`、`verify-jobs`、`verify-jobs-async` |
 | 资源实际产物 | `verify-assets`、`verify-resource-versions`、`verify-source-identity`、`verify-resource-operations`、`verify-resident-resources`、`verify-resource-registration` |
@@ -79,7 +77,7 @@ if ($quietBuild.ExitCode -ne 0) { throw "后台验证失败，退出码 $($quiet
 
 直接后台运行Python验证脚本时去掉`--console-tree`，并把`--`后的命令换为`python.exe -B tools/verify_host.py`等实际脚本。日志文件必须全新，已有证据不会被覆盖。外部启动方也必须采用隐藏入口；仅在内部脚本设置标志不能阻止其外层启动器先弹窗口。
 
-`runtime-pack` 在 `zig-out/vm-runtime/` 生成独立 Runtime；`verify-runtime` 会真实动态装载它，验证保存/恢复、便携副本、绝对路径打开和篡改拒绝，不要求 wgpu 在场。`shell-pack` 在 `zig-out/vm-shell/` 生成桌面 Shell；`verify-shell` 验证缺失拒绝、真实 VM→Shell 启动与播放帧号投影，不截图或自动输入。`verify-replay` 在两个隔离数据根中比较命令回放的文档、History、Task 状态哈希、逻辑时间和 PNG，并验证语义输入回放与命令/输入时间倒退拒绝。`verify-input` 通过真实分发 Runtime DLL 录制 50 条语义事件，覆盖添加 invert、撤销、重做与文本上下文抑制；复制日志到全新数据根后校验相同文档指纹和 History 游标，不注入 OS 输入。`verify-playback` 用真实单调时钟验证四帧播放与停止/重启。`verify-assets` 经真实分发 Runtime DLL 验证素材租约复用、PNG 预览、独立快照导出/恢复和损坏内容拒绝；原外部文件删除后，已加载素材仍可预览。还验证临时 external 拒绝、持久原文件直接插入、显式快照插入、撤销/重做、PNG 导出、租约释放，以及重启后 Station 为空但 Source 文档仍可导出。内容变化不会覆盖旧文档版本，只有显式再次插入才更新；缺失文件、损坏快照、损坏授权目录和 Source 哈希不符均按对应错误拒绝。`verify-shell` 另通过显式 `--assets-demo` 走通真实桌面的素材选择、预览、库内独立化、插入和文档 GPU 提交，不模拟鼠标键盘。`verify-assets` 还覆盖库项去重、独立化后删除原文件、库内创建、重启恢复、拥有态禁止刷新、篡改内容与损坏目录。
+`runtime-pack` 在 `zig-out/vm-runtime/` 生成独立 Runtime；`verify-runtime` 会真实动态装载它，验证保存/恢复、便携副本、绝对路径打开和篡改拒绝，不要求旧图形库在场。`shell-pack` 在 `zig-out/vm-shell/` 生成统一 NanoUI 桌面 Shell；`verify-shell` 验证缺失拒绝、真实 VM→Shell 启动与播放帧号投影，不截图或自动输入。`verify-replay` 在两个隔离数据根中比较命令回放的文档、History、Task 状态哈希、逻辑时间和 PNG，并验证语义输入回放与命令/输入时间倒退拒绝。`verify-input` 通过真实分发 Runtime DLL 录制 50 条语义事件，覆盖添加 invert、撤销、重做与文本上下文抑制；复制日志到全新数据根后校验相同文档指纹和 History 游标，不注入 OS 输入。`verify-playback` 用真实单调时钟验证四帧播放与停止/重启。`verify-assets` 经真实分发 Runtime DLL 验证素材租约复用、PNG 预览、独立快照导出/恢复和损坏内容拒绝；原外部文件删除后，已加载素材仍可预览。还验证临时 external 拒绝、持久原文件直接插入、显式快照插入、撤销/重做、PNG 导出、租约释放，以及重启后 Station 为空但 Source 文档仍可导出。内容变化不会覆盖旧文档版本，只有显式再次插入才更新；缺失文件、损坏快照、损坏授权目录和 Source 哈希不符均按对应错误拒绝。`verify-shell` 另通过显式 `--assets-demo` 走通真实桌面的素材选择、预览、库内独立化、插入和文档 GPU 提交，不模拟鼠标键盘。`verify-assets` 还覆盖库项去重、独立化后删除原文件、库内创建、重启恢复、拥有态禁止刷新、篡改内容与损坏目录。
 
 `verify-host` 通过真实 `cutrans_vm.exe`、独立 Host 和本机消息管道验证幂等启动、单实例、旧入口双写者拒绝、保存失败后的 degraded 与重试、异常终止恢复，以及应用目录不被写入。`verify-attach` 进一步验证关闭 Shell 后 Host 继续存活、四次附着、素材与播放的真实提交计数、Shell 身份锁和重启恢复。
 

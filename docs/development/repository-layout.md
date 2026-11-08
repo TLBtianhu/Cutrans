@@ -38,10 +38,10 @@
 
 ## GitHub与源码包
 
-源码快照包含第一方实现、构建和验证脚本、文档、许可证及固定依赖的必要文件。完整Zig、本机exe／dll／lib／pdb、Python缓存、运行数据和验收目录不应提交；已锁定system_sdk的两份`.so`是保留的第三方SDK例外，不能宣称整个仓库完全没有二进制。
+源码快照包含第一方实现、构建和验证脚本、文档、许可证及固定依赖的必要文件。完整Zig、本机exe／dll／lib／pdb、Python缓存、运行数据和验收目录不应提交。旧system_sdk及两份`.so`已随旧UI栈移除，不再作为源码包例外。
 
 `tools/repository_audit.py`检查源码包清单、构建输入、相对依赖与文档链接；新增模块或工具时应同时维护包清单。Git忽略规则不影响已跟踪文件，发现缓存已被跟踪时须显式移除索引。
 
-Windows检出时使用仓库局部`core.longpaths=true`处理SDK深路径，不修改系统长路径策略。SDK的`.gitattributes`保留Cutrans一项元数据补丁：`!text`改为`-text`，明确禁止Git对这些文件做换行转换。原因是其中176份非UTF8头文件／资源文件会受全局autocrlf影响，造成检出内容与锁不一致；未修改这些源码正文，补丁及新有效hash在依赖锁中记录。源码ZIP导出另显式关闭本次Git命令的autocrlf转换，避免机器全局配置改变交付字节。
+Windows检出时使用仓库局部`core.longpaths=true`处理依赖深路径，不修改系统长路径策略。旧system_sdk及其非UTF8资源、`.gitattributes`补丁已随旧UI栈移除；当前依赖以`dependencies.lock.json`的实际有效树哈希为准。源码ZIP导出另显式关闭本次Git命令的autocrlf转换，避免机器全局配置改变交付字节。
 
 用户随后明确授权重建公开历史：`master`已从验收源码树建立新根，旧试验标签与Release先备份后撤下。旧记录在本机私有bundle及`refs/private/`保留，不能把这些备份用`push --mirror`重新推回公开仓库。此操作只证明本仓库已审分支／标签不再引用旧历史，不能证明GitHub缓存或他人的副本已物理删除；用户指定的fork保持原样。实施与证据见[历史重置记录](../memory/2026-11-07-public-history-reset.md)。

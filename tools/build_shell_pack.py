@@ -25,7 +25,6 @@ def main() -> None:
     root = Path(args.root)
     files = (sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()) if args.all_files else args.files) or [
         args.entry,
-        "wgpu_native.dll",
         "config/startup.ccb",
         "assets/commands/00-example.ccmd",
         "assets/examples/minimal.cut",
@@ -35,15 +34,14 @@ def main() -> None:
         "assets/examples/SOURCES.md",
         "assets/examples/libpng-LICENSE.txt",
         "licenses/Cutrans.txt",
-        "licenses/wgpu-native.txt",
-        "licenses/zglfw.txt",
-        "licenses/glfw.txt",
-        "licenses/zgui.txt",
-        "licenses/imgui.txt",
         "licenses/stb.txt",
-        "licenses/system_sdk.txt",
-        "licenses/NotoSansSC-OFL.txt",
-        "licenses/RemixIcons.txt",
+        "licenses/nanoui.txt",
+        "licenses/nanoui-THIRD_PARTY_NOTICES.md",
+        "licenses/GPUI-Apache-2.0.txt",
+        "licenses/GPUI-Kit-Apache-2.0.txt",
+        "licenses/gpui-motion-MIT.txt",
+        "licenses/mygo-MIT.txt",
+        "licenses/Windows-Terminal-MIT.txt",
     ]
     manifest = {
         "format": "cutrans-shell-pack/1",

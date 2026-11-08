@@ -50,6 +50,7 @@ pub const Window = struct {
     on_close: ?Callback = null,
     should_close: ?ShouldClose = null,
     on_resize: ?Callback = null,
+    on_present: ?Callback = null,
     on_key: ?Callback = null,
     on_fullscreen: ?Callback = null,
     closed: bool = false,
@@ -75,7 +76,7 @@ pub const Window = struct {
     pub fn create(app: *App, options: Options) !*Window {
         const self = try app.gpa.create(Window);
         errdefer app.gpa.destroy(self);
-        self.* = .{ .app = app, .title_bar = options.title_bar, .on_close = options.on_close, .should_close = options.should_close, .on_resize = options.on_resize, .on_key = options.on_key, .on_fullscreen = options.on_fullscreen, .width = options.width, .height = options.height, .theme = options.theme, .min_width = options.min_width, .min_height = options.min_height, .opacity = options.opacity, .transparent = options.transparent and !options.decorations };
+        self.* = .{ .app = app, .title_bar = options.title_bar, .on_close = options.on_close, .should_close = options.should_close, .on_resize = options.on_resize, .on_present = options.on_present, .on_key = options.on_key, .on_fullscreen = options.on_fullscreen, .width = options.width, .height = options.height, .theme = options.theme, .min_width = options.min_width, .min_height = options.min_height, .opacity = options.opacity, .transparent = options.transparent and !options.decorations };
         // A page is made once the window it fills exists, below.
         var page_options: ?PageOptions = null;
         switch (options.content) {

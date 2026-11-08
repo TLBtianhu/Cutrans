@@ -25,24 +25,14 @@ import automation_process
 
 ROOT = Path(__file__).resolve().parents[1]
 FIRST_PARTY = ("apps", "assets", "bootstrap", "build_support", "config", "consoles", "docs",
-    "gpu", "host", "packaging", "ports", "runtime", "shell", "uikit", "vne")
+    "host", "packaging", "ports", "runtime", "shell", "uikit", "vne")
 SKIP_DIRS = {".git", ".zig-cache", "zig-out", "zig-pkg", "scratch", "__pycache__", ".cutrans-dev"}
 NATIVE_SUFFIXES = {".exe", ".dll", ".lib", ".pdb", ".obj", ".o", ".a", ".so", ".dylib", ".pyc", ".pyo"}
-RESTORED_ROOTS = ("tools/zig", "tools/InnoSetup", "third_party/wgpu/lib", "third_party/system_sdk/windows/lib")
-# These two Git-vendored SDK objects predate bootstrap. Their exact bytes remain
-# covered by dependencies.lock.json/dependency_audit.py. Do not generalize this
-# exception to other native files or claim that the source package has none.
-RETAINED_SDK_BINARIES = frozenset({
-    "third_party/system_sdk/linux/lib/x86_64-linux-gnu/libX11.so",
-    "third_party/system_sdk/linux/lib/aarch64-linux-gnu/libX11.so",
-})
-RESTORED_INPUTS = frozenset({"tools/zig/zig.exe", "tools/InnoSetup/ISCC.exe", "third_party/wgpu/lib",
-    "third_party/wgpu/lib/wgpu_native.dll", "third_party/wgpu/lib/wgpu_native.dll.lib",
-    "third_party/wgpu/lib/wgpu_native.lib", "third_party/wgpu/lib/wgpu_native.pdb",
-    "third_party/system_sdk/windows/lib/x86_64-windows-gnu/dxguid.lib"})
-GENERATED_INPUTS = {"config/startup.ccb": "config/compile_startup.py",
-    "apps/desktop/assets/ui/desktop.cui": "apps/desktop/assets/ui/compile_ui.py"}
-GENERATED_MODULES = {"desktop_cui": "apps/desktop/assets/ui/compile_ui.py"}
+RESTORED_ROOTS = ("tools/zig", "tools/InnoSetup")
+RETAINED_SDK_BINARIES = frozenset()
+RESTORED_INPUTS = frozenset({"tools/zig/zig.exe", "tools/InnoSetup/ISCC.exe"})
+GENERATED_INPUTS = {"config/startup.ccb": "config/compile_startup.py"}
+GENERATED_MODULES = {}
 # This archived prose used Markdown-looking notation for a conceptual tuple,
 # rather than a filesystem destination. Keep the exact source/raw expression;
 # other missing links, including other bare names, must still fail.
@@ -402,7 +392,7 @@ def audit(root, *, git=True):
             "concept_links": [], "packaged_output_links": []},
         "limitations": ["Static literal input/file-link audit; does not execute Zig or inspect Markdown anchors",
             "Vendor Markdown is not navigation owned by this repository; dependency hashes are audited separately",
-            "Two pinned SDK libX11.so objects are retained explicitly; source package is not entirely binary-free"]}
+            "Native toolchain and product binaries are restored outside the source package"]}
     try:
         manifest = safe_path(root, "build.zig.zon")
         manifest_text = manifest.read_text(encoding="utf-8")

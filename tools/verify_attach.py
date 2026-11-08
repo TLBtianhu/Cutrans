@@ -72,12 +72,15 @@ def _verify(console: Path, shell: Path, mode: str, root: Path) -> None:
         start_and_verify(shell, document, data, mode, cleanup=False, assets_demo=True, settle_seconds=0.5)
         _, current = invoke(console, "status", data, mode)
         assert current["state"] == "running" and current["boot"] == 1 and current["document"] != initial_document and current["present"] >= 2, current
+        committed_lock = (data / "session/runtime.lock").read_text(encoding="utf-8")
+        if "shell_id=desktop-shell" not in committed_lock:
+            raise RuntimeError("a successful headless desktop did not commit its Shell identity")
 
         start_and_verify(shell, document, data, mode, cleanup=False, playback_frames=4, settle_seconds=0.5)
         _, current = invoke(console, "status", data, mode)
         assert current["state"] == "running" and current["boot"] == 1 and current["present"] >= 3, current
         lock_text = (data / "session/runtime.lock").read_text(encoding="utf-8")
-        if "runtime_id=cutrans-vm" not in lock_text or "shell_id=" in lock_text or str(root) in lock_text or "C:\\" in lock_text:
+        if lock_text != committed_lock or "runtime_id=cutrans-vm" not in lock_text or str(root) in lock_text or "C:\\" in lock_text:
             raise RuntimeError("an abruptly terminated attached Shell changed the committed selection")
 
         _, current = invoke(console, "stop", data, mode)

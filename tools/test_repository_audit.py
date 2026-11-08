@@ -73,9 +73,6 @@ class RepositoryAuditTests(unittest.TestCase):
         self.assertEqual(guard.forbidden("apps/__pycache__/old.pyc"), "generated/cache directory")
         self.assertEqual(guard.forbidden("runtime/accidental.dll"), "native binary or Python bytecode")
         self.assertEqual(guard.forbidden("config/startup.ccb"), "generated source-tree output")
-        self.assertEqual(guard.forbidden("apps/desktop/assets/ui/desktop.cui"), "generated source-tree output")
-        self.assertEqual(guard.zig_inputs("apps/desktop/view.zig", 'const data = @embedFile("desktop_cui");'),
-            [(".", "apps/desktop/assets/ui/compile_ui.py")])
         (root / "config").mkdir()
         (root / "config/startup.ccb").write_bytes(b"owned stale generated output")
         result = self.report(root)

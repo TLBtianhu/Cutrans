@@ -159,7 +159,7 @@ def main() -> None:
         raise RuntimeError("tampered runtime was loaded or created user data")
     if hashes(runtime) != before or (portable / "data").exists() or (runtime / "data").exists():
         raise RuntimeError("runtime verification polluted portable staging")
-    print("CUTRANS_RUNTIME_VERIFY_OK portable=1 absolute_open=1 tamper_rejected=1 wgpu_free=1")
+    print("CUTRANS_RUNTIME_VERIFY_OK portable=1 absolute_open=1 tamper_rejected=1 legacy_gpu_free=1")
     retain(root)
 
 

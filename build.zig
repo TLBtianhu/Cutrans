@@ -37,11 +37,6 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(&build_context_install.step);
     b.getInstallStep().dependOn(&b.addInstallFile(installed_context.manifest, "installation/cutrans-context.json").step);
 
-    // ── VM 桌面:zglfw 窗口 + wgpu-native 呈现 + zgui 控件(no_backend)──
-    // ImGui 的 glfw/wgpu 后端从 zgui 捆绑源码自编译,链接我们自己的 wgpu_native
-    // ——全工程只有一套 WebGPU 实现,不引入 Dawn。
-    const zglfw_dep = b.dependency("zglfw", .{ .target = target, .optimize = optimize });
-    const zgui_dep = b.dependency("zgui", .{ .target = target, .optimize = optimize, .backend = .no_backend });
     const nanoui_dep = b.dependency("nanoui", .{
         .target = target,
         .optimize = optimize,
@@ -69,98 +64,9 @@ pub fn build(b: *std.Build) void {
     runtime.addImport("assets", assets);
     runtime.addImport("ports", ports);
     const palette = b.createModule(.{ .root_source_file = b.path("uikit/palette.zig"), .target = target, .optimize = optimize });
-    const uikit = b.createModule(.{ .root_source_file = b.path("uikit/root.zig"), .target = target, .optimize = optimize });
-    uikit.addImport("palette", palette);
-    uikit.addImport("runtime", runtime);
-    uikit.addImport("zgui", zgui_dep.module("root"));
-    const gpu = b.createModule(.{ .root_source_file = b.path("gpu/root.zig"), .target = target, .optimize = optimize });
-    gpu.addImport("zgui", zgui_dep.module("root"));
-    const vm_client = b.createModule(.{ .root_source_file = b.path("consoles/gui/vm_client.zig"), .target = target, .optimize = optimize });
-    vm_client.addImport("runtime", runtime);
-    vm_client.addImport("vne", vne);
-    const editor = b.createModule(.{ .root_source_file = b.path("apps/editor/editor.zig"), .target = target, .optimize = optimize });
-    editor.addImport("runtime", runtime);
-    editor.addImport("vne", vne);
-    editor.addImport("uikit", uikit);
-    editor.addImport("ports", ports);
-    editor.addImport("vm_client", vm_client);
-    editor.addImport("zgui", zgui_dep.module("root"));
-    const library_app = b.createModule(.{ .root_source_file = b.path("apps/library/library.zig"), .target = target, .optimize = optimize });
-    library_app.addImport("runtime", runtime);
-    library_app.addImport("vne", vne);
-    library_app.addImport("uikit", uikit);
-    library_app.addImport("ports", ports);
-    library_app.addImport("vm_client", vm_client);
-    library_app.addImport("zgui", zgui_dep.module("root"));
-    const cli = b.createModule(.{ .root_source_file = b.path("consoles/cli/cli.zig"), .target = target, .optimize = optimize });
-    cli.addImport("runtime", runtime);
-    cli.addImport("uikit", uikit);
-    cli.addImport("zgui", zgui_dep.module("root"));
-    const system_workspace = b.createModule(.{ .root_source_file = b.path("consoles/gui/workspace.zig"), .target = target, .optimize = optimize });
-    system_workspace.addImport("runtime", runtime);
-    system_workspace.addImport("uikit", uikit);
-    system_workspace.addImport("zgui", zgui_dep.module("root"));
-    cli.addImport("system_workspace", system_workspace);
-    const desktop = b.createModule(.{ .root_source_file = b.path("apps/desktop/desktop.zig"), .target = target, .optimize = optimize });
-    desktop.addImport("runtime", runtime);
-    desktop.addImport("uikit", uikit);
-    desktop.addImport("zgui", zgui_dep.module("root"));
-    desktop.addImport("system_workspace", system_workspace);
-    const desktop_shell = b.addLibrary(.{
-        .name = "cutrans_desktop",
-        .linkage = .dynamic,
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("consoles/gui/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libcpp = true,
-            .imports = &.{
-                .{ .name = "zglfw", .module = zglfw_dep.module("root") },
-                .{ .name = "zgui", .module = zgui_dep.module("root") },
-                .{ .name = "assets", .module = assets },
-                .{ .name = "ports", .module = ports },
-                .{ .name = "vne", .module = vne },
-                .{ .name = "runtime", .module = runtime },
-                .{ .name = "uikit", .module = uikit },
-                .{ .name = "gpu", .module = gpu },
-                .{ .name = "editor", .module = editor },
-                .{ .name = "library", .module = library_app },
-                .{ .name = "vm_client", .module = vm_client },
-                .{ .name = "cli", .module = cli },
-                .{ .name = "desktop", .module = desktop },
-                .{ .name = "system_workspace", .module = system_workspace },
-            },
-        }),
-    });
-    desktop_shell.root_module.linkLibrary(zglfw_dep.artifact("glfw"));
-    desktop_shell.root_module.linkLibrary(zgui_dep.artifact("imgui"));
-    desktop_shell.root_module.addIncludePath(zgui_dep.path("libs/imgui"));
-    desktop_shell.root_module.addIncludePath(zgui_dep.path("libs/imgui/backends"));
-    desktop_shell.root_module.addIncludePath(b.path("third_party/wgpu/include"));
-    desktop_shell.root_module.addCMacro("IMGUI_IMPL_API", "extern \"C\"");
-    desktop_shell.root_module.addCMacro("IMGUI_DISABLE_OBSOLETE_FUNCTIONS", "");
-    desktop_shell.root_module.addCSourceFile(.{
-        .file = zgui_dep.path("libs/imgui/backends/imgui_impl_glfw.cpp"),
-        .flags = &.{"-std=c++17"},
-    });
-    desktop_shell.root_module.addLibraryPath(b.path("third_party/wgpu/lib"));
-    desktop_shell.root_module.linkSystemLibrary("wgpu_native.dll", .{});
-    desktop_shell.root_module.linkSystemLibrary("imm32", .{});
-    desktop_shell.root_module.linkSystemLibrary("dwmapi", .{});
-    desktop_shell.root_module.linkSystemLibrary("ole32", .{});
-    const desktop_ui_compile = b.addSystemCommand(&.{"python"});
-    desktop_ui_compile.addFileArg2(b.path("apps/desktop/assets/ui/compile_ui.py"), .{});
-    desktop_ui_compile.addArg("--source");
-    desktop_ui_compile.addFileArg2(b.path("apps/desktop/assets/ui/desktop.json"), .{});
-    desktop_ui_compile.addArg("--output");
-    const desktop_ui_binary = desktop_ui_compile.addOutputFileArg2("desktop.cui", .{});
-    desktop.addAnonymousImport("desktop_cui", .{ .root_source_file = desktop_ui_binary });
-    b.installArtifact(desktop_shell);
-
     const shell_client_module = b.createModule(.{ .root_source_file = b.path("shell/root.zig"), .target = target, .optimize = optimize });
     shell_client_module.addImport("vne", vne);
     shell_client_module.addImport("ports", ports);
-    vm_client.addImport("shell", shell_client_module);
     const host_module = b.createModule(.{ .root_source_file = b.path("host/root.zig"), .target = target, .optimize = optimize });
     host_module.addImport("vne", vne);
     host_module.addImport("ports", ports);
@@ -170,11 +76,61 @@ pub fn build(b: *std.Build) void {
     bootstrap_module.addImport("ports", ports);
     bootstrap_module.addImport("host", host_module);
     bootstrap_module.addImport("shell_client", shell_client_module);
+    const vm_client = b.createModule(.{ .root_source_file = b.path("consoles/gui/vm_client.zig"), .target = target, .optimize = optimize });
+    vm_client.addImport("runtime", runtime);
+    vm_client.addImport("vne", vne);
+    vm_client.addImport("shell", shell_client_module);
+    const input_bridge = b.createModule(.{ .root_source_file = b.path("consoles/gui/nanoui_input.zig"), .target = target, .optimize = optimize });
+    input_bridge.addImport("vne", vne);
+    input_bridge.addImport("nanoui", nanoui_dep.module("nanoui"));
+    const editor = b.createModule(.{ .root_source_file = b.path("apps/editor/nanoui.zig"), .target = target, .optimize = optimize });
+    editor.addImport("runtime", runtime);
+    editor.addImport("vne", vne);
+    editor.addImport("vm_client", vm_client);
+    editor.addImport("palette", palette);
+    editor.addImport("nanoui", nanoui_dep.module("nanoui"));
     const nanoui_library_app = b.createModule(.{ .root_source_file = b.path("apps/library/nanoui.zig"), .target = target, .optimize = optimize });
     nanoui_library_app.addImport("palette", palette);
     nanoui_library_app.addImport("vne", vne);
     nanoui_library_app.addImport("shell", shell_client_module);
     nanoui_library_app.addImport("nanoui", nanoui_dep.module("nanoui"));
+    const nanoui_console = b.createModule(.{ .root_source_file = b.path("consoles/cli/nanoui.zig"), .target = target, .optimize = optimize });
+    nanoui_console.addImport("runtime", runtime);
+    nanoui_console.addImport("shell", shell_client_module);
+    nanoui_console.addImport("nanoui", nanoui_dep.module("nanoui"));
+    const desktop_app = b.createModule(.{ .root_source_file = b.path("apps/desktop/nanoui.zig"), .target = target, .optimize = optimize });
+    desktop_app.addImport("runtime", runtime);
+    desktop_app.addImport("vne", vne);
+    desktop_app.addImport("vm_client", vm_client);
+    desktop_app.addImport("nanoui_input", input_bridge);
+    desktop_app.addImport("editor", editor);
+    desktop_app.addImport("nanoui_library", nanoui_library_app);
+    desktop_app.addImport("nanoui_console", nanoui_console);
+    desktop_app.addImport("palette", palette);
+    desktop_app.addImport("nanoui", nanoui_dep.module("nanoui"));
+    const stb = b.addLibrary(.{
+        .name = "cutrans_stb",
+        .linkage = .static,
+        .root_module = b.createModule(.{ .target = target, .optimize = optimize }),
+    });
+    stb.root_module.link_libc = true;
+    stb.root_module.addCSourceFile(.{ .file = b.path("runtime/stb_image_impl.c"), .flags = &.{"-std=c99"} });
+    stb.root_module.addIncludePath(b.path("third_party/stb"));
+    const desktop_shell = b.addExecutable(.{
+        .name = "cutrans_shell",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("consoles/cli/vm_shell.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "bootstrap", .module = bootstrap_module },
+                .{ .name = "vne", .module = vne },
+                .{ .name = "nanoui_desktop", .module = desktop_app },
+            },
+        }),
+    });
+    desktop_shell.root_module.linkLibrary(stb);
+    b.installArtifact(desktop_shell);
     const nanoui_library = b.addExecutable(.{
         .name = "cutrans_library_nanoui",
         .root_module = b.createModule(.{
@@ -201,7 +157,6 @@ pub fn build(b: *std.Build) void {
     launcher.root_module.linkSystemLibrary("shell32", .{});
     launcher.root_module.linkSystemLibrary("ole32", .{});
     b.installArtifact(launcher);
-    b.installBinFile("third_party/wgpu/lib/wgpu_native.dll", "wgpu_native.dll");
     // 启动清单先由文本源码编成 CCB,再随 exe 安装;runtime 只执行二进制
     const startup_compile = b.addSystemCommand(&.{"python"});
     startup_compile.addFileArg2(b.path("config/compile_startup.py"), .{});
@@ -233,16 +188,6 @@ pub fn build(b: *std.Build) void {
             .imports = &.{ .{ .name = "runtime", .module = runtime }, .{ .name = "vne", .module = vne } },
         }),
     });
-    const stb = b.addLibrary(.{
-        .name = "cutrans_stb",
-        .linkage = .static,
-        .root_module = b.createModule(.{ .target = target, .optimize = optimize }),
-    });
-    stb.root_module.link_libc = true;
-    stb.root_module.addCSourceFile(.{ .file = b.path("runtime/stb_image_impl.c"), .flags = &.{"-std=c99"} });
-    stb.root_module.addIncludePath(b.path("third_party/stb"));
-    stb.root_module.addIncludePath(b.path("third_party/zgui/libs/imgui_test_engine/thirdparty/stb"));
-    desktop_shell.root_module.linkLibrary(stb);
     diagnostics.root_module.linkLibrary(stb);
     diagnostics.root_module.linkSystemLibrary("shell32", .{});
     diagnostics.root_module.linkSystemLibrary("ole32", .{});
@@ -300,19 +245,6 @@ pub fn build(b: *std.Build) void {
     vm_host.root_module.linkSystemLibrary("ole32", .{});
     b.installArtifact(vm_host);
 
-    const vm_shell = b.addExecutable(.{
-        .name = "cutrans_shell",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("consoles/cli/vm_shell.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{.{ .name = "bootstrap", .module = bootstrap_module }},
-        }),
-    });
-    vm_shell.root_module.linkSystemLibrary("shell32", .{});
-    vm_shell.root_module.linkSystemLibrary("ole32", .{});
-    b.installArtifact(vm_shell);
-
     const runtime_files_step = b.step("runtime-files", "Stage independent VM Runtime files");
     const runtime_pack_step = b.step("runtime-pack", "Create an independently loadable VM Runtime Pack");
     var runtime_files = pack_support.Files.init(b);
@@ -340,8 +272,7 @@ pub fn build(b: *std.Build) void {
     const shell_files_step = b.step("shell-files", "Stage desktop Shell files");
     const shell_pack_step = b.step("shell-pack", "Create a desktop Shell Pack");
     var shell_files = pack_support.Files.init(b);
-    shell_files.add(desktop_shell.getEmittedBin(), "cutrans_desktop.dll");
-    shell_files.add(b.path("third_party/wgpu/lib/wgpu_native.dll"), "wgpu_native.dll");
+    shell_files.add(desktop_shell.getEmittedBin(), "cutrans_shell.exe");
     const shell_sources = .{
         .{ "config/startup.ccb", "vm-shell/config/startup.ccb" },
         .{ "assets/commands/00-example.ccmd", "vm-shell/assets/commands/00-example.ccmd" },
@@ -352,21 +283,20 @@ pub fn build(b: *std.Build) void {
         .{ "assets/examples/SOURCES.md", "vm-shell/assets/examples/SOURCES.md" },
         .{ "assets/examples/libpng-LICENSE.txt", "vm-shell/assets/examples/libpng-LICENSE.txt" },
         .{ "LICENSE", "vm-shell/licenses/Cutrans.txt" },
-        .{ "third_party/wgpu/LICENSE.MIT", "vm-shell/licenses/wgpu-native.txt" },
-        .{ "third_party/zglfw/LICENSE", "vm-shell/licenses/zglfw.txt" },
-        .{ "third_party/zglfw/libs/glfw/LICENSE.md", "vm-shell/licenses/glfw.txt" },
-        .{ "third_party/zgui/LICENSE", "vm-shell/licenses/zgui.txt" },
-        .{ "third_party/zgui/libs/imgui/LICENSE.txt", "vm-shell/licenses/imgui.txt" },
         .{ "third_party/stb/LICENSE", "vm-shell/licenses/stb.txt" },
-        .{ "third_party/system_sdk/LICENSE", "vm-shell/licenses/system_sdk.txt" },
-        .{ "assets/fonts/OFL.txt", "vm-shell/licenses/NotoSansSC-OFL.txt" },
-        .{ "assets/fonts/RemixIcons-LICENSE.txt", "vm-shell/licenses/RemixIcons.txt" },
+        .{ "third_party/nanoui/LICENSE", "vm-shell/licenses/nanoui.txt" },
+        .{ "third_party/nanoui/THIRD_PARTY_NOTICES.md", "vm-shell/licenses/nanoui-THIRD_PARTY_NOTICES.md" },
+        .{ "third_party/nanoui/third_party/licenses/GPUI-Apache-2.0.txt", "vm-shell/licenses/GPUI-Apache-2.0.txt" },
+        .{ "third_party/nanoui/third_party/licenses/GPUI-Kit-Apache-2.0.txt", "vm-shell/licenses/GPUI-Kit-Apache-2.0.txt" },
+        .{ "third_party/nanoui/third_party/licenses/gpui-motion-MIT.txt", "vm-shell/licenses/gpui-motion-MIT.txt" },
+        .{ "third_party/nanoui/third_party/licenses/mygo-MIT.txt", "vm-shell/licenses/mygo-MIT.txt" },
+        .{ "third_party/nanoui/third_party/licenses/Windows-Terminal-MIT.txt", "vm-shell/licenses/Windows-Terminal-MIT.txt" },
     };
     inline for (shell_sources) |source| {
         shell_files.add(if (comptime std.mem.eql(u8, source[0], "config/startup.ccb")) startup_binary else b.path(source[0]), source[1]["vm-shell/".len..]);
     }
     shell_files_step.dependOn(&shell_files.write.step);
-    const shell_pack_dir = shell_files.finish("tools/build_shell_pack.py", "shell-pack.json", &.{ "--abi", "windows-x64", "--entry", "cutrans_desktop.dll" });
+    const shell_pack_dir = shell_files.finish("tools/build_shell_pack.py", "shell-pack.json", &.{ "--abi", "windows-x64", "--entry", "cutrans_shell.exe", "--all-files" });
     const shell_install = b.addInstallDirectory(.{ .source_dir = shell_pack_dir, .install_dir = .prefix, .install_subdir = "vm-shell" });
     shell_pack_step.dependOn(&shell_install.step);
     b.getInstallStep().dependOn(&shell_install.step);
@@ -412,8 +342,7 @@ pub fn build(b: *std.Build) void {
     portable_files.add(diagnostics.getEmittedBin(), "cutrans_diag.exe");
     portable_files.add(bootstrap.getEmittedBin(), "cutrans_bootstrap.exe");
     portable_files.add(vm_host.getEmittedBin(), "cutrans_vm_host.exe");
-    portable_files.add(vm_shell.getEmittedBin(), "cutrans_shell.exe");
-    portable_files.add(b.path("third_party/wgpu/lib/wgpu_native.dll"), "wgpu_native.dll");
+    portable_files.add(desktop_shell.getEmittedBin(), "cutrans_shell.exe");
     portable_files.directory(runtime_pack_dir, "runtime");
     portable_files.directory(shell_pack_dir, "shell");
     portable_files.directory(nanoui_pack_dir, "nanoui-library");
@@ -424,15 +353,14 @@ pub fn build(b: *std.Build) void {
     portable_files.add(b.path("packaging/README-portable.md"), "README.md");
     const portable_notices = .{
         .{ "LICENSE", "portable/licenses/Cutrans.txt" },
-        .{ "third_party/wgpu/LICENSE.MIT", "portable/licenses/wgpu-native.txt" },
-        .{ "third_party/zglfw/LICENSE", "portable/licenses/zglfw.txt" },
-        .{ "third_party/zglfw/libs/glfw/LICENSE.md", "portable/licenses/glfw.txt" },
-        .{ "third_party/zgui/LICENSE", "portable/licenses/zgui.txt" },
-        .{ "third_party/zgui/libs/imgui/LICENSE.txt", "portable/licenses/imgui.txt" },
         .{ "third_party/stb/LICENSE", "portable/licenses/stb.txt" },
-        .{ "third_party/system_sdk/LICENSE", "portable/licenses/system_sdk.txt" },
-        .{ "assets/fonts/OFL.txt", "portable/licenses/NotoSansSC-OFL.txt" },
-        .{ "assets/fonts/RemixIcons-LICENSE.txt", "portable/licenses/RemixIcons.txt" },
+        .{ "third_party/nanoui/LICENSE", "portable/licenses/nanoui.txt" },
+        .{ "third_party/nanoui/THIRD_PARTY_NOTICES.md", "portable/licenses/nanoui-THIRD_PARTY_NOTICES.md" },
+        .{ "third_party/nanoui/third_party/licenses/GPUI-Apache-2.0.txt", "portable/licenses/GPUI-Apache-2.0.txt" },
+        .{ "third_party/nanoui/third_party/licenses/GPUI-Kit-Apache-2.0.txt", "portable/licenses/GPUI-Kit-Apache-2.0.txt" },
+        .{ "third_party/nanoui/third_party/licenses/gpui-motion-MIT.txt", "portable/licenses/gpui-motion-MIT.txt" },
+        .{ "third_party/nanoui/third_party/licenses/mygo-MIT.txt", "portable/licenses/mygo-MIT.txt" },
+        .{ "third_party/nanoui/third_party/licenses/Windows-Terminal-MIT.txt", "portable/licenses/Windows-Terminal-MIT.txt" },
     };
     inline for (portable_notices) |notice| portable_files.add(b.path(notice[0]), notice[1]["portable/".len..]);
     pack_files_step.dependOn(&portable_files.write.step);
@@ -665,26 +593,19 @@ pub fn build(b: *std.Build) void {
     }) });
     image_tests.root_module.linkLibrary(stb);
     test_support.addModuleTests(b, test_step, image_tests);
-    const workspace_tests = b.addTest(.{ .root_module = system_workspace });
-    workspace_tests.root_module.linkLibrary(zgui_dep.artifact("imgui"));
-    workspace_tests.root_module.link_libcpp = true;
-    const run_workspace_tests = b.addRunArtifact(workspace_tests);
-    test_step.dependOn(&run_workspace_tests.step);
-    const cli_tests = b.addTest(.{ .root_module = cli });
-    cli_tests.root_module.linkLibrary(zgui_dep.artifact("imgui"));
-    cli_tests.root_module.link_libcpp = true;
-    const run_cli_tests = b.addRunArtifact(cli_tests);
-    test_step.dependOn(&run_cli_tests.step);
-    const uikit_tests = b.addTest(.{ .root_module = uikit });
-    uikit_tests.root_module.linkLibrary(zgui_dep.artifact("imgui"));
-    uikit_tests.root_module.link_libcpp = true;
-    const run_uikit_tests = b.addRunArtifact(uikit_tests);
-    test_step.dependOn(&run_uikit_tests.step);
-    const backend_tests = b.addTest(.{ .root_module = desktop_shell.root_module });
-    const run_backend_tests = b.addRunArtifact(backend_tests);
-    run_backend_tests.setCwd(b.path(""));
-    run_backend_tests.setEnvironmentVariable("PATH", b.fmt("third_party/wgpu/lib;{s}", .{b.graph.environ_map.get("PATH") orelse ""}));
-    test_step.dependOn(&run_backend_tests.step);
+    const editor_tests = b.addTest(.{ .root_module = editor });
+    editor_tests.root_module.linkLibrary(stb);
+    test_support.addModuleTests(b, test_step, editor_tests);
+    const console_tests = b.addTest(.{ .root_module = nanoui_console });
+    test_support.addModuleTests(b, test_step, console_tests);
+    const input_tests = b.addTest(.{ .root_module = input_bridge });
+    test_support.addModuleTests(b, test_step, input_tests);
+    const desktop_tests = b.addTest(.{ .root_module = desktop_app });
+    desktop_tests.root_module.linkLibrary(stb);
+    test_support.addModuleTests(b, test_step, desktop_tests);
+    const nanoui_desktop_test_step = b.step("test-nanoui-desktop", "Compile the unified NanoUI desktop frontend");
+    nanoui_desktop_test_step.dependOn(&desktop_tests.step);
+    nanoui_desktop_test_step.dependOn(&desktop_shell.step);
 
     const portable_run_step = b.step("run-portable", "Run the portable Cutrans VM");
     const portable_run = pack_support.action(b, "run-portable", &.{});

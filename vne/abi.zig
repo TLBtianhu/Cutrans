@@ -84,14 +84,6 @@ pub fn runtimeLibraryName() []const u8 {
     };
 }
 
-pub fn shellLibraryName() []const u8 {
-    return switch (@import("builtin").os.tag) {
-        .windows => "cutrans_desktop.dll",
-        .macos => "libcutrans_desktop.dylib",
-        else => "libcutrans_desktop.so",
-    };
-}
-
 pub const InputEvent = extern struct {
     struct_size: u32,
     abi_version: u32,

@@ -151,8 +151,11 @@
     "src/ui/shader.hlsl",
     "src/ui/tests_d3d11.zig",
     "src/ui/ui.zig",
+    "src/window_types.zig",
     "src/windows/app.zig",
-    "src/windows/surface_gpu.zig"
+    "src/windows/surface_gpu.zig",
+    "src/windows/tests_window.zig",
+    "src/windows/window.zig"
   ],
   "absorbed_pull_requests": [
     71,

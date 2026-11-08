@@ -12,7 +12,7 @@
 - 独立 Runtime／Host；关闭 Shell 后导出继续，支持取消、归档查询和保留原输入的重试。
 - 稳定资源 ID、逻辑文件夹、只读引用与显式独立化；已采用版本不随来源变化而改写。
 - TXT、PNG、未知格式和空文件的通用只读登记及 App 交付，单文件上限16MiB；登记不等于支持预览或编辑。
-- zgui/wgpu 桌面与可选 NanoUI 资源库共享同一 Host；已加载完整内容可脱离原件使用。
+- 统一 NanoUI 桌面包含首页、编辑器、资源库、CLI 与任务视图，并共享同一 Host；已加载完整内容可脱离原件使用。
 
 完整文件浏览 App、云来源、可编辑工作正文、真实视频／音频、完整时间轴与不可信插件沙箱仍未实现。Windows x64 是当前产品验证平台；真实 GUI／IME及本轮完整安装升级卸载尚未验收，没有将当前源码产物发布为已验收正式版本。
 
@@ -45,7 +45,7 @@ cd Cutrans
 | [界面规范](docs/ui-style.md) | 深靛蓝、冰蓝淡紫及克制金属高光 |
 
 ```text
-apps/ consoles/ uikit/ gpu/  应用、操作台和呈现
+apps/ consoles/ uikit/      应用、操作台和 NanoUI 呈现
 runtime/ vne/ shell/        VM语义、协议和共享客户端
 bootstrap/ host/ ports/     启动、独立Host和OS口岸
 assets/ config/ packaging/  资源、启动声明和分发脚本

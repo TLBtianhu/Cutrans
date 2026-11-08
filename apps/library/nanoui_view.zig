@@ -188,6 +188,9 @@ fn previewPanel(state: *State, c: *ui.Context) void {
             ui.text(c, @import("shell").mirror.sourceStatusText(loaded.source_state), .{ .color = c.theme.muted, .wrap = true });
             if (ui.button(c, "核对已加载来源", .{}).clicked) state.checkSelectedSource() catch |err| state.fail("来源核对未完成；已加载预览保持可用", err);
         }
+        if (state.on_insert) |handler| {
+            if (ui.button(c, "插入到文档", .{ .variant = .primary }).clicked) handler.run(handler.context, state.selected_handle) catch |err| state.fail("素材插入失败", err);
+        }
         if (item != null and item.?.kind.? == .reference) {
             ui.row(c, .{ .gap = 8 });
             defer ui.end(c);

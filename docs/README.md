@@ -20,6 +20,8 @@
 
 - [项目记忆](../MEMORY.md)：宪法、主题索引和最新实施记录。
 - [现役状态](memory/current.md)：当前实现、原型限额和未完成范围。
+- [统一 NanoUI 前端与旧 UI 清理](memory/2026-11-08-nanoui-unification.md)：主桌面迁移、依赖移除、输入与 Present 回执及实际验证边界。
+- [2026-11-08进度与问题清单](memory/2026-11-08-progress.md)：A／B／C阶段定位、遗留问题、下一切片及验收边界。
 - [连续创作计划与A／B／C实施](memory/2026-11-07-architecture-plan.md)：用户决定、建议及各片验收。
 - [通用登记与App交付](memory/2026-11-07-resource-registration.md)：C2c2实际DLL／Host验证和未覆盖项。
 - [工程基线与上游](memory/2026-11-06-foundation.md)、[隔离实施](memory/2026-11-06-isolation.md)、[隐藏自动化](memory/2026-11-07-quiet-automation.md)。

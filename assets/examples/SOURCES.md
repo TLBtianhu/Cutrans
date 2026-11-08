@@ -13,7 +13,7 @@
 
 - 来源：`nothings/stb`
 - `stb_image.h`：v2.30，来自上游 master
-- `stb_image_write.h`：v1.13，来自项目 vendored zgui 的 ImGui test engine
+- `imstb_image_write.h`：v1.13，来自旧 vendored zgui 的 ImGui test engine；旧 UI 已移除，仅保留该独立 PNG 编码头文件
 - 许可证：MIT 或 Public Domain，任选其一；见 `third_party/stb/LICENSE`
 
 ## `replay.cvr`

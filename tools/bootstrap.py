@@ -22,18 +22,6 @@ ZIG_URL = "https://ziglang.org/download/0.17.0/zig-x86_64-windows-0.17.0.zip"
 ZIG_ARCHIVE_SHA256 = "b5663f69581dcf391293fbf16c06cb80d81d806545ce618b4d0bab7f0eb8c428"
 ZIG_EXE_SHA256 = "f54b14f02a4d7d8ac62a94a0663486eb166bba3745d85b466238c1b93e723d46"
 
-WGPU_URL = "https://github.com/gfx-rs/wgpu-native/releases/download/v29.0.1.1/wgpu-windows-x86_64-msvc-release.zip"
-WGPU_ARCHIVE_SHA256 = "7e67d7445c42aeb85e30f88930fd8d7d83ee769e3390aeb1ada75ebf3cf78132"
-WGPU_FILES = {
-    "wgpu_native.dll": "5e26249c40dcdac43f5adca3195fcf40e4ec6c67472b38510165f411fcc198e7",
-    "wgpu_native.dll.lib": "261adb64aef86a3ebaf7f6f370d14bed083f93e25e2eec70a7c54d33954e4572",
-    "wgpu_native.lib": "c47ed51546823c02c6d33e24a58e62e0535442ca1897a17d2305b2e55df35729",
-    "wgpu_native.pdb": "90adf1ec5a8e1c518be4b0bf213c1ed21f066fdfd57d768aa16ed4e89d868160",
-}
-
-DXGUID_URL = "https://raw.githubusercontent.com/zig-gamedev/system_sdk/beb29112ae93b3f7ef0140be0c9f340b1145f5c9/windows/lib/x86_64-windows-gnu/dxguid.lib"
-DXGUID_SHA256 = "f5c539bba43b412d13f112dc76164d60cf9c0f13732b95d13b9d87a07eeedb5a"
-
 HTTP_COMMIT = "1f798e762f52ff81cc6c370b4f322c9e65064462"
 HTTP_URL = f"https://codeload.github.com/justrach/http-zig/tar.gz/{HTTP_COMMIT}"
 HTTP_ARCHIVE_SHA256 = "36d696751bf9662d409fd8767d6617027bc322f9eabdbdf72d615de109499bcc"
@@ -218,24 +206,6 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory(prefix="cutrans-bootstrap-") as temporary:
         work = Path(temporary)
-        dxguid_relative = "third_party/system_sdk/windows/lib/x86_64-windows-gnu/dxguid.lib"
-        dxguid_target = ROOT / dxguid_relative
-        if dxguid_target.is_file() and sha256(dxguid_target.read_bytes()) == DXGUID_SHA256:
-            print(f"present {dxguid_relative}")
-        else:
-            dxguid = download(DXGUID_URL, DXGUID_SHA256, work / "dxguid.lib", opener)
-            install_bytes(dxguid_relative, dxguid.read_bytes(), DXGUID_SHA256, args.force)
-
-        if all((ROOT / "third_party/wgpu/lib" / name).is_file() and
-               sha256((ROOT / "third_party/wgpu/lib" / name).read_bytes()) == expected
-               for name, expected in WGPU_FILES.items()):
-            print("present wgpu-native v29.0.1.1 (all native file hashes verified)")
-        else:
-            wgpu_archive = download(WGPU_URL, WGPU_ARCHIVE_SHA256, work / "wgpu.zip", opener)
-            with zipfile.ZipFile(wgpu_archive) as archive:
-                for name, expected in WGPU_FILES.items():
-                    install_bytes(f"third_party/wgpu/lib/{name}", archive.read(f"lib/{name}"), expected, args.force)
-
         zig_archive = download(ZIG_URL, ZIG_ARCHIVE_SHA256,
                                ROOT / "zig-pkg/bootstrap/zig-0.17.0-windows-x64.zip", opener)
         install_zig(zig_archive, args.force)

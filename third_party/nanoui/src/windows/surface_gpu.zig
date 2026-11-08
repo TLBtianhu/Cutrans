@@ -12,6 +12,7 @@ const raster = @import("../ui/raster.zig");
 const types = @import("../ui/types.zig");
 const surface = @import("surface.zig");
 const Surface = surface.Surface;
+const Window = @import("window.zig").Window;
 const clock = @import("../ui/clock.zig");
 const frame_timing = @import("frame_timing.zig");
 
@@ -190,6 +191,10 @@ pub fn invalidate(self: *Surface) void {
 /// One WM_PAINT: the GPU when it can and the window is opaque, else the
 /// canvas and a GDI copy. `WM_PAINT` arrives only when something invalidated,
 /// and `BeginPaint` clears the region: painting is the frame's output.
+pub fn notifyPresent(window: *Window) void {
+    if (window.on_present) |callback| callback.func(callback.ctx, window);
+}
+
 pub fn paint(self: *Surface, h: w.HWND) void {
     const logging = self.frame_log != null;
     const t_paint = if (logging) clock.now() else 0;
@@ -240,6 +245,7 @@ pub fn paint(self: *Surface, h: w.HWND) void {
         // The GPU drew the whole frame: no canvas, so the presentation is
         // everything from here to `EndPaint`.
         painted(self, logging, t_paint, t_paint);
+        notifyPresent(self.window);
         return;
     }
     self.pixels.draw(self.gpa, shown(self));
@@ -253,6 +259,7 @@ pub fn paint(self: *Surface, h: w.HWND) void {
     // layered window, for the same reason `paintGpu` stands down above.
     if (wantsGpu(self) and present(self, h)) {
         painted(self, logging, t_paint, t_raster);
+        notifyPresent(self.window);
         return;
     }
     // A negative height: rows from the top, as the renderer writes them.

@@ -79,8 +79,13 @@ that Cutrans has implemented or verified a Linux application.
 4. **Opt-in persistent values.** `src/windows/app.zig` adds `Options.kv`
    (default `true`). Cutrans selects `false`, keeping KV in memory and
    preventing implicit reads from another application/data environment.
+5. **Successful GPU-present callback.** `src/window_types.zig`,
+   `src/windows/window.zig`, and `src/windows/surface_gpu.zig` expose an
+   optional `on_present` callback only after a successful GPU swap-chain
+   present. GDI output does not trigger it. `src/windows/tests_window.zig`
+   covers callback ownership; Cutrans uses it for VM frame receipts.
 
-These **eight source files** are the complete deviations from the new
+These **eleven source files** are the complete deviations from the new
 fork base. `VENDOR.md` and `VENDOR.json` are Cutrans's provenance records. Local patches
 remain candidates for a coherent upstream batch; no new PR is implied.
 

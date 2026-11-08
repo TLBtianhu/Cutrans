@@ -127,6 +127,8 @@ pub fn Options(comptime Window: type) type {
         on_close: ?Callback(Window) = null,
         /// Called after the window resized.
         on_resize: ?Callback(Window) = null,
+        /// Called after a successful GPU swap-chain present, not for GDI output.
+        on_present: ?Callback(Window) = null,
         /// Called as it enters or leaves full screen: read `isFullScreen()`.
         on_fullscreen: ?Callback(Window) = null,
         /// Called as it becomes or stops being the key window: read `isFocused()`.

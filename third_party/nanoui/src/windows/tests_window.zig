@@ -312,6 +312,28 @@ test "the sideways wheel reaches the view along x" {
     try testing.expectEqual(@as(f32, 48), p.got_x);
 }
 
+test "the presentation callback receives its owning window" {
+    const gpa = testing.allocator;
+    const app = try makeApp(gpa);
+    defer app.destroy();
+    var p: Page = .{};
+    var c: Counter = .{};
+    const Callback = struct {
+        fn present(ctx: *anyopaque, window: *Window) void {
+            const counter: *Counter = @ptrCast(@alignCast(ctx));
+            counter.n += @intFromBool(window.surface != null);
+        }
+    };
+    const win = try app.newWindow(.{
+        .title = "present callback",
+        .visible = false,
+        .on_present = .{ .ctx = &c, .func = Callback.present },
+        .content = .{ .view = .init(&p, Page.view) },
+    });
+    @import("surface_gpu.zig").notifyPresent(win);
+    try testing.expectEqual(@as(u32, 1), c.n);
+}
+
 test "onMain lands the call on the thread that pumps" {
     const gpa = testing.allocator;
     const app = try makeApp(gpa);

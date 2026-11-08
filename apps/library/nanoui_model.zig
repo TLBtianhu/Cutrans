@@ -3,6 +3,11 @@ const nanoui = @import("nanoui");
 const abi = @import("vne").abi;
 const mirror = @import("shell").mirror;
 
+pub const Insert = struct {
+    context: ?*anyopaque,
+    run: *const fn (?*anyopaque, u64) anyerror!void,
+};
+
 pub const State = struct {
     allocator: std.mem.Allocator,
     api: abi.ShellApi,
@@ -18,6 +23,7 @@ pub const State = struct {
     rename_target: u64 = 0,
     rename_buffer: nanoui.ui.TextBuffer = .{},
     new_folder_buffer: nanoui.ui.TextBuffer = .{},
+    on_insert: ?Insert = null,
     status_storage: [320]u8 = @splat(0),
     status_len: usize = 0,
 
