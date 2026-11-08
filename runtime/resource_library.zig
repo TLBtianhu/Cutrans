@@ -26,6 +26,34 @@ pub const Resource = struct {
     provenance: Provenance,
     source_uri: []u8,
     content_hash: [32]u8,
+    work_revision: u64 = 0,
+    draft_base_revision: u64 = 0,
+    draft_revision: u64 = 0,
+    draft_hash: [32]u8 = @splat(0),
+};
+
+pub const WorkReceipt = struct {
+    client_hi: u64,
+    client_lo: u64,
+    sequence: u64,
+    mode: @import("vne").resource_api.WorkMode,
+    request_hash: [32]u8,
+    resource_id: u64,
+    work_revision: u64,
+    draft_revision: u64,
+    content_hash: [32]u8,
+};
+
+const WorkReceiptEntry = struct {
+    client_hi: u64,
+    client_lo: u64,
+    sequence: u64,
+    mode: []const u8,
+    request_hash: []const u8,
+    resource_id: u64,
+    work_revision: u64,
+    draft_revision: u64,
+    content_hash: []const u8,
 };
 
 pub const Node = union(enum) {
@@ -47,13 +75,19 @@ const Entry = struct {
     provenance: []const u8,
     source: []const u8,
     sha256: []const u8,
+    work_revision: u64 = 0,
+    draft_base_revision: u64 = 0,
+    draft_revision: u64 = 0,
+    draft_sha256: []const u8 = &.{},
 };
 
 const Manifest = struct {
     format: []const u8,
     next_id: u64,
+    next_draft_revision: u64 = 1,
     folders: []FolderEntry = &.{},
     resources: []Entry,
+    work_receipts: []WorkReceiptEntry = &.{},
 };
 
 fn hash(bytes: []const u8) [32]u8 {
@@ -91,7 +125,10 @@ pub const Catalog = struct {
     folders: [32]Folder = undefined,
     folder_count: usize = 0,
     next_id: u64 = 1,
+    next_draft_revision: u64 = 1,
     revision: u64 = 0,
+    work_receipts: [@import("vne").resource_api.receipt_capacity]WorkReceipt = undefined,
+    work_receipt_count: usize = 0,
 
     const Mutation = struct {
         revision: u64,
@@ -217,7 +254,7 @@ pub const Catalog = struct {
         const io = ctx.io orelse return error.IoNotReady;
         var out: std.ArrayList(u8) = .empty;
         defer out.deinit(ctx.allocator);
-        try appendFmt(&out, ctx.allocator, "{{\"format\":\"cutrans-resource-library/2\",\"next_id\":{d},\"folders\":[", .{self.next_id});
+        try appendFmt(&out, ctx.allocator, "{{\"format\":\"cutrans-resource-library/3\",\"next_id\":{d},\"next_draft_revision\":{d},\"folders\":[", .{ self.next_id, self.next_draft_revision });
         for (self.folders[0..self.folder_count], 0..) |folder, index| {
             if (index != 0) try out.appendSlice(ctx.allocator, ",");
             try appendFmt(&out, ctx.allocator, "{{\"id\":{d},\"parent_id\":{d}", .{ folder.id, folder.parent_id });
@@ -234,6 +271,21 @@ pub const Catalog = struct {
             try appendJsonString(&out, ctx.allocator, "source", item.source_uri);
             const digest = std.fmt.bytesToHex(item.content_hash, .lower);
             try appendJsonString(&out, ctx.allocator, "sha256", &digest);
+            try appendFmt(&out, ctx.allocator, ",\"work_revision\":{d},\"draft_base_revision\":{d},\"draft_revision\":{d}", .{ item.work_revision, item.draft_base_revision, item.draft_revision });
+            const draft_digest = std.fmt.bytesToHex(item.draft_hash, .lower);
+            try appendJsonString(&out, ctx.allocator, "draft_sha256", if (item.draft_revision == 0) "" else &draft_digest);
+            try out.appendSlice(ctx.allocator, "}");
+        }
+        try out.appendSlice(ctx.allocator, "],\"work_receipts\":[");
+        for (self.work_receipts[0..self.work_receipt_count], 0..) |receipt, index| {
+            if (index != 0) try out.appendSlice(ctx.allocator, ",");
+            try appendFmt(&out, ctx.allocator, "{{\"client_hi\":{d},\"client_lo\":{d},\"sequence\":{d}", .{ receipt.client_hi, receipt.client_lo, receipt.sequence });
+            try appendJsonString(&out, ctx.allocator, "mode", @tagName(receipt.mode));
+            const request_digest = std.fmt.bytesToHex(receipt.request_hash, .lower);
+            try appendJsonString(&out, ctx.allocator, "request_hash", &request_digest);
+            try appendFmt(&out, ctx.allocator, ",\"resource_id\":{d},\"work_revision\":{d},\"draft_revision\":{d}", .{ receipt.resource_id, receipt.work_revision, receipt.draft_revision });
+            const content_digest = std.fmt.bytesToHex(receipt.content_hash, .lower);
+            try appendJsonString(&out, ctx.allocator, "content_hash", &content_digest);
             try out.appendSlice(ctx.allocator, "}");
         }
         try out.appendSlice(ctx.allocator, "]}\n");
@@ -243,8 +295,13 @@ pub const Catalog = struct {
     }
 
     fn append(self: *Catalog, ctx: *RuntimeContext, label: []const u8, kind: Kind, provenance: Provenance, source_uri: []const u8, content_hash: [32]u8, parent_id: u64) !u64 {
+        return self.appendInternal(ctx, label, kind, provenance, source_uri, content_hash, parent_id, null);
+    }
+
+    fn appendInternal(self: *Catalog, ctx: *RuntimeContext, label: []const u8, kind: Kind, provenance: Provenance, source_uri: []const u8, content_hash: [32]u8, parent_id: u64, work_receipt: ?WorkReceipt) !u64 {
         const mutation = try self.prepareMutation(ctx, true);
         const next_id = try self.prepareAppend(label, parent_id);
+        if (work_receipt != null and self.work_receipt_count == self.work_receipts.len) return error.WorkReceiptLimit;
         const id = self.next_id;
         const owned_label = try ctx.allocator.dupe(u8, label);
         const owned_source = ctx.allocator.dupe(u8, source_uri) catch |err| {
@@ -259,6 +316,7 @@ pub const Catalog = struct {
             .provenance = provenance,
             .source_uri = owned_source,
             .content_hash = content_hash,
+            .work_revision = if (kind == .owned) 1 else 0,
         };
         self.count += 1;
         errdefer {
@@ -268,6 +326,11 @@ pub const Catalog = struct {
         }
         self.next_id = next_id;
         errdefer self.next_id = id;
+        if (work_receipt) |receipt| {
+            self.work_receipts[self.work_receipt_count] = receipt;
+            self.work_receipt_count += 1;
+            errdefer self.work_receipt_count -= 1;
+        }
         try self.save(ctx);
         mutation.publish(self, ctx);
         return id;
@@ -439,9 +502,11 @@ pub const Catalog = struct {
         const old_provenance = item.provenance;
         item.kind = .owned;
         item.provenance = .detached;
+        item.work_revision = 1;
         self.save(ctx) catch |err| {
             item.kind = old_kind;
             item.provenance = old_provenance;
+            item.work_revision = 0;
             return err;
         };
         mutation.publish(self, ctx);
@@ -476,8 +541,160 @@ pub const Catalog = struct {
         mutation.publish(self, ctx);
     }
 
-    fn readOwnedBytes(self: *Catalog, ctx: *RuntimeContext, id: u64, digest: [32]u8) ![]u8 {
+    fn publishWorkFile(ctx: *RuntimeContext, kind: @import("work_files.zig").Kind, id: u64, revision: u64, digest: [32]u8, bytes: []const u8) !void {
         const io = ctx.io orelse return error.IoNotReady;
+        var dir = try ctx.paths.openDataDir(io, ctx.allocator);
+        defer dir.close(io);
+        try @import("work_files.zig").publish(dir, io, ctx.allocator, kind, id, revision, digest, bytes);
+    }
+
+    pub fn readDraft(self: *Catalog, ctx: *RuntimeContext, id: u64) ![]u8 {
+        const item = self.get(id) orelse return error.ResourceNotFound;
+        if (item.kind != .owned or item.draft_revision == 0) return error.DraftConflict;
+        const io = ctx.io orelse return error.IoNotReady;
+        var dir = try ctx.paths.openDataDirExisting(io);
+        defer dir.close(io);
+        return @import("work_files.zig").read(dir, io, ctx.allocator, .drafts, id, item.draft_revision, item.draft_hash);
+    }
+
+    pub fn createWork(self: *Catalog, ctx: *RuntimeContext, label: []const u8, bytes: []const u8, envelope: WorkReceipt) !WorkReceipt {
+        if (self.work_receipt_count == self.work_receipts.len) return error.WorkReceiptLimit;
+        _ = try self.prepareMutation(ctx, true);
+        _ = try self.prepareAppend(label, 0);
+        const id = self.next_id;
+        const digest = hash(bytes);
+        try publishWorkFile(ctx, .work, id, 1, digest, bytes);
+        var receipt = envelope;
+        receipt.resource_id = id;
+        receipt.work_revision = 1;
+        receipt.draft_revision = 0;
+        receipt.content_hash = digest;
+        _ = try self.appendInternal(ctx, label, .owned, .created, "", digest, 0, receipt);
+        return receipt;
+    }
+
+    pub fn saveWorkDraft(self: *Catalog, ctx: *RuntimeContext, id: u64, base_revision: u64, expected_draft: u64, bytes: []const u8, envelope: WorkReceipt) !WorkReceipt {
+        const item = self.getMut(id) orelse return error.ResourceNotFound;
+        if (item.kind != .owned) return error.ResourceNotReference;
+        if (base_revision == 0 or base_revision > item.work_revision) return error.StaleWorkRevision;
+        if (item.draft_revision != expected_draft or (expected_draft != 0 and item.draft_base_revision != base_revision)) return error.DraftConflict;
+        if (self.work_receipt_count == self.work_receipts.len) return error.WorkReceiptLimit;
+        const token = self.next_draft_revision;
+        const next_token = std.math.add(u64, token, 1) catch return error.DraftRevisionExhausted;
+        const mutation = try self.prepareMutation(ctx, false);
+        const digest = hash(bytes);
+        try publishWorkFile(ctx, .drafts, id, token, digest, bytes);
+        const previous_base = item.draft_base_revision;
+        const previous_draft = item.draft_revision;
+        const previous_hash = item.draft_hash;
+        item.draft_base_revision = base_revision;
+        item.draft_revision = token;
+        item.draft_hash = digest;
+        self.next_draft_revision = next_token;
+        errdefer {
+            item.draft_base_revision = previous_base;
+            item.draft_revision = previous_draft;
+            item.draft_hash = previous_hash;
+            self.next_draft_revision = token;
+        }
+        var receipt = envelope;
+        receipt.resource_id = id;
+        receipt.work_revision = item.work_revision;
+        receipt.draft_revision = token;
+        receipt.content_hash = item.content_hash;
+        self.work_receipts[self.work_receipt_count] = receipt;
+        self.work_receipt_count += 1;
+        errdefer self.work_receipt_count -= 1;
+        try self.save(ctx);
+        mutation.publish(self, ctx);
+        return receipt;
+    }
+
+    pub fn commitWorkDraft(self: *Catalog, ctx: *RuntimeContext, id: u64, expected_draft: u64, envelope: WorkReceipt) !WorkReceipt {
+        const item = self.getMut(id) orelse return error.ResourceNotFound;
+        if (item.kind != .owned) return error.ResourceNotReference;
+        if (expected_draft == 0 or item.draft_revision != expected_draft) return error.DraftConflict;
+        if (item.draft_base_revision != item.work_revision) return error.StaleWorkRevision;
+        if (self.work_receipt_count == self.work_receipts.len) return error.WorkReceiptLimit;
+        const next_revision = std.math.add(u64, item.work_revision, 1) catch return error.WorkRevisionExhausted;
+        const mutation = try self.prepareMutation(ctx, true);
+        const bytes = try self.readDraft(ctx, id);
+        defer ctx.allocator.free(bytes);
+        try publishWorkFile(ctx, .work, id, next_revision, item.draft_hash, bytes);
+        const previous_revision = item.work_revision;
+        const previous_hash = item.content_hash;
+        const previous_base = item.draft_base_revision;
+        const previous_draft_hash = item.draft_hash;
+        item.work_revision = next_revision;
+        item.content_hash = item.draft_hash;
+        item.draft_base_revision = 0;
+        item.draft_revision = 0;
+        item.draft_hash = @splat(0);
+        errdefer {
+            item.work_revision = previous_revision;
+            item.content_hash = previous_hash;
+            item.draft_base_revision = previous_base;
+            item.draft_revision = expected_draft;
+            item.draft_hash = previous_draft_hash;
+        }
+        var receipt = envelope;
+        receipt.resource_id = id;
+        receipt.work_revision = next_revision;
+        receipt.draft_revision = 0;
+        receipt.content_hash = item.content_hash;
+        self.work_receipts[self.work_receipt_count] = receipt;
+        self.work_receipt_count += 1;
+        errdefer self.work_receipt_count -= 1;
+        try self.save(ctx);
+        mutation.publish(self, ctx);
+        return receipt;
+    }
+
+    pub fn discardWorkDraft(self: *Catalog, ctx: *RuntimeContext, id: u64, expected_draft: u64, envelope: WorkReceipt) !WorkReceipt {
+        const item = self.getMut(id) orelse return error.ResourceNotFound;
+        if (item.kind != .owned) return error.ResourceNotReference;
+        if (expected_draft == 0 or item.draft_revision != expected_draft) return error.DraftConflict;
+        if (self.work_receipt_count == self.work_receipts.len) return error.WorkReceiptLimit;
+        const mutation = try self.prepareMutation(ctx, false);
+        const previous_base = item.draft_base_revision;
+        const previous_hash = item.draft_hash;
+        item.draft_base_revision = 0;
+        item.draft_revision = 0;
+        item.draft_hash = @splat(0);
+        errdefer {
+            item.draft_base_revision = previous_base;
+            item.draft_revision = expected_draft;
+            item.draft_hash = previous_hash;
+        }
+        var receipt = envelope;
+        receipt.resource_id = id;
+        receipt.work_revision = item.work_revision;
+        receipt.draft_revision = 0;
+        receipt.content_hash = item.content_hash;
+        self.work_receipts[self.work_receipt_count] = receipt;
+        self.work_receipt_count += 1;
+        errdefer self.work_receipt_count -= 1;
+        try self.save(ctx);
+        mutation.publish(self, ctx);
+        return receipt;
+    }
+
+    fn readOwnedBytes(self: *Catalog, ctx: *RuntimeContext, id: u64, digest: [32]u8) ![]u8 {
+        const item = self.get(id) orelse return error.ResourceNotFound;
+        const io = ctx.io orelse return error.IoNotReady;
+        const working: ?[]u8 = blk: {
+            if (item.work_revision == 0) break :blk null;
+            var dir = ctx.paths.openDataDirExisting(io) catch |err| {
+                if (err == error.FileNotFound) break :blk null;
+                return err;
+            };
+            defer dir.close(io);
+            break :blk @import("work_files.zig").read(dir, io, ctx.allocator, .work, id, item.work_revision, digest) catch |err| {
+                if (err == error.FileNotFound) break :blk null;
+                return err;
+            };
+        };
+        if (working) |bytes| return bytes;
         const retained: ?[]u8 = blk: {
             var dir = ctx.paths.openDataDirExisting(io) catch |err| {
                 if (err == error.FileNotFound) break :blk null;
@@ -598,10 +815,16 @@ pub const Catalog = struct {
         defer parsed.deinit();
         const manifest = parsed.value;
         const legacy = std.mem.eql(u8, manifest.format, "cutrans-resource-library/1");
-        if ((!legacy and !std.mem.eql(u8, manifest.format, "cutrans-resource-library/2")) or manifest.next_id == 0 or manifest.resources.len > self.items.len or manifest.folders.len > self.folders.len) return error.InvalidResourceLibrary;
-        // Reloading an older declaration within this Runtime must not reuse a
-        // previously published stable library identity.
-        var next: Catalog = .{ .next_id = @max(self.next_id, manifest.next_id) };
+        const legacy_v2 = std.mem.eql(u8, manifest.format, "cutrans-resource-library/2");
+        const current = std.mem.eql(u8, manifest.format, "cutrans-resource-library/3");
+        if ((!legacy and !legacy_v2 and !current) or manifest.next_id == 0 or manifest.next_draft_revision == 0 or
+            manifest.resources.len > self.items.len or manifest.folders.len > self.folders.len or
+            manifest.work_receipts.len > self.work_receipts.len) return error.InvalidResourceLibrary;
+        // Administrative high-water marks never move backwards during a reload.
+        var next: Catalog = .{
+            .next_id = @max(self.next_id, manifest.next_id),
+            .next_draft_revision = @max(self.next_draft_revision, manifest.next_draft_revision),
+        };
         errdefer next.deinit(ctx.allocator);
         for (manifest.folders) |entry| {
             if (legacy or entry.id == 0 or entry.id >= manifest.next_id or next.getNode(entry.id) != null) return error.InvalidResourceLibrary;
@@ -623,6 +846,17 @@ pub const Catalog = struct {
             if (entry.sha256.len != 64) return error.InvalidResourceLibrary;
             var digest: [32]u8 = undefined;
             _ = std.fmt.hexToBytes(&digest, entry.sha256) catch return error.InvalidResourceLibrary;
+            const work_revision = if (kind == .owned) (if (current) entry.work_revision else 1) else 0;
+            if ((kind == .owned and work_revision == 0) or (kind == .reference and
+                (entry.work_revision != 0 or entry.draft_base_revision != 0 or entry.draft_revision != 0))) return error.InvalidResourceLibrary;
+            if (entry.draft_revision == 0) {
+                if (entry.draft_base_revision != 0 or entry.draft_sha256.len != 0) return error.InvalidResourceLibrary;
+            } else {
+                if (kind != .owned or entry.draft_revision >= next.next_draft_revision or
+                    entry.draft_base_revision == 0 or entry.draft_base_revision > work_revision or entry.draft_sha256.len != 64) return error.InvalidResourceLibrary;
+            }
+            var draft_digest: [32]u8 = @splat(0);
+            if (entry.draft_revision != 0) _ = std.fmt.hexToBytes(&draft_digest, entry.draft_sha256) catch return error.InvalidResourceLibrary;
             if (kind == .reference) {
                 const uri = try externalUri(entry.source);
                 if (!(ctx.mounts.isPersistentExternal(uri) catch return error.InvalidResourceLibrary)) return error.InvalidResourceLibrary;
@@ -645,8 +879,38 @@ pub const Catalog = struct {
                 .provenance = provenance,
                 .source_uri = source_uri,
                 .content_hash = digest,
+                .work_revision = work_revision,
+                .draft_base_revision = entry.draft_base_revision,
+                .draft_revision = entry.draft_revision,
+                .draft_hash = draft_digest,
             };
             next.count += 1;
+        }
+        for (manifest.work_receipts) |entry| {
+            if ((entry.client_hi == 0 and entry.client_lo == 0) or entry.sequence == 0 or entry.resource_id == 0 or
+                entry.work_revision == 0 or entry.draft_revision >= next.next_draft_revision or
+                entry.request_hash.len != 64 or entry.content_hash.len != 64) return error.InvalidResourceLibrary;
+            const resource = next.get(entry.resource_id) orelse return error.InvalidResourceLibrary;
+            if (resource.kind != .owned or entry.work_revision > resource.work_revision) return error.InvalidResourceLibrary;
+            for (next.work_receipts[0..next.work_receipt_count]) |previous| {
+                if (previous.client_hi == entry.client_hi and previous.client_lo == entry.client_lo and previous.sequence == entry.sequence) return error.InvalidResourceLibrary;
+            }
+            var request_digest: [32]u8 = undefined;
+            var content_digest: [32]u8 = undefined;
+            _ = std.fmt.hexToBytes(&request_digest, entry.request_hash) catch return error.InvalidResourceLibrary;
+            _ = std.fmt.hexToBytes(&content_digest, entry.content_hash) catch return error.InvalidResourceLibrary;
+            next.work_receipts[next.work_receipt_count] = .{
+                .client_hi = entry.client_hi,
+                .client_lo = entry.client_lo,
+                .sequence = entry.sequence,
+                .mode = std.meta.stringToEnum(@import("vne").resource_api.WorkMode, entry.mode) orelse return error.InvalidResourceLibrary,
+                .request_hash = request_digest,
+                .resource_id = entry.resource_id,
+                .work_revision = entry.work_revision,
+                .draft_revision = entry.draft_revision,
+                .content_hash = content_digest,
+            };
+            next.work_receipt_count += 1;
         }
         next.validateHierarchy() catch return error.InvalidResourceLibrary;
         self.deinit(ctx.allocator);

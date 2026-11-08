@@ -234,11 +234,66 @@ fn resourceSubmit(context: ?*anyopaque, request: ?*const resource.Request, out: 
     return abi.Status.ok;
 }
 
+fn workSnapshot(context: ?*anyopaque, id: u64, expected: ?*const resource.WorkSnapshot, out: ?*resource.WorkSnapshot, buffer: ?[*]u8, capacity: usize, out_len: ?*usize) callconv(.c) i32 {
+    _ = context;
+    if (id == 0 or out == null or out_len == null or (buffer != null and expected == null)) return abi.Status.invalid_arguments;
+    out_len.?.* = 0;
+    if (!initialized) return abi.Status.invalid_state;
+    var encoded: [protocol.work_wire.snapshot_size]u8 = undefined;
+    const payload: []const u8 = if (expected) |value| protocol.work_wire.writeSnapshot(&encoded, value.*) catch return abi.Status.invalid_arguments else &.{};
+    var reply = call(.work_snapshot, id, payload) catch return abi.Status.failed;
+    defer reply.deinit();
+    if (reply.status != abi.Status.ok) return reply.status;
+    if (reply.value != 0 or reply.payload.len < protocol.work_wire.snapshot_size) return abi.Status.failed;
+    const metadata = protocol.work_wire.readSnapshot(reply.payload[0..protocol.work_wire.snapshot_size]) catch return abi.Status.failed;
+    const bytes = reply.payload[protocol.work_wire.snapshot_size..];
+    if (metadata.resource_id != id or metadata.body_len != bytes.len) return abi.Status.failed;
+    if (expected) |value| if (!std.meta.eql(value.*, metadata)) return abi.Status.failed;
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    if (!std.mem.eql(u8, &digest, &metadata.body_hash)) return abi.Status.failed;
+    out.?.* = metadata;
+    out_len.?.* = bytes.len;
+    const output = buffer orelse return abi.Status.buffer_too_small;
+    if (capacity < bytes.len) return abi.Status.buffer_too_small;
+    @memcpy(output[0..bytes.len], bytes);
+    return abi.Status.ok;
+}
+
+fn workSubmit(context: ?*anyopaque, request: ?*const resource.WorkRequest, out: ?*resource.WorkOutcome) callconv(.c) i32 {
+    _ = context;
+    const value = request orelse return abi.Status.invalid_arguments;
+    const result_out = out orelse return abi.Status.invalid_arguments;
+    if (!initialized) return abi.Status.invalid_state;
+    const label = if (value.label.len == 0) "" else value.label.ptr.?[0..value.label.len];
+    const body = if (value.body.len == 0) "" else value.body.ptr.?[0..value.body.len];
+    const payload = protocol.work_wire.encodeRequest(client.allocator, value, label, body) catch |err| return switch (err) {
+        error.OutOfMemory => abi.Status.out_of_memory,
+        else => abi.Status.invalid_arguments,
+    };
+    defer client.allocator.free(payload);
+    var reply = call(.work_submit, 0, payload) catch return abi.Status.failed;
+    defer reply.deinit();
+    if (reply.status != abi.Status.ok or reply.value != 0) return if (reply.status == abi.Status.ok) abi.Status.failed else reply.status;
+    const outcome = protocol.work_wire.readOutcome(reply.payload) catch return abi.Status.failed;
+    if (outcome.sequence != value.sequence) return abi.Status.failed;
+    if (outcome.status == abi.Status.ok and (outcome.resource_id == 0 or outcome.work_revision == 0)) return abi.Status.failed;
+    result_out.* = outcome;
+    return abi.Status.ok;
+}
+
 fn resourceApi(context: ?*anyopaque, out: ?*resource.Api) callconv(.c) i32 {
     _ = context;
     if (!initialized) return abi.Status.invalid_state;
     const result = out orelse return abi.Status.invalid_arguments;
-    result.* = .{ .context = &client, .snapshot = resourceSnapshot, .probe = resourceProbe, .submit = resourceSubmit };
+    result.* = .{
+        .context = &client,
+        .snapshot = resourceSnapshot,
+        .probe = resourceProbe,
+        .submit = resourceSubmit,
+        .work_snapshot = workSnapshot,
+        .work_submit = workSubmit,
+    };
     return abi.Status.ok;
 }
 
@@ -352,6 +407,9 @@ fn assetPreview(context: ?*anyopaque, id: u64, out_info: ?*abi.AssetInfo) callco
     const out = out_info orelse return abi.Status.invalid_arguments;
     var reply = call(.asset_preview, id, &.{}) catch return abi.Status.failed;
     defer reply.deinit();
+    if (reply.status != abi.Status.ok or reply.payload.len != @sizeOf(abi.AssetInfo)) {
+        std.debug.print("CUTRANS_ASSET_PREVIEW_RPC handle={d} status={d} bytes={d} expected={d}\n", .{ id, reply.status, reply.payload.len, @sizeOf(abi.AssetInfo) });
+    }
     return copyFixed(abi.AssetInfo, reply, out);
 }
 

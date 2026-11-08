@@ -428,6 +428,10 @@ pub fn build(b: *std.Build) void {
     const registration_verify = pack_support.verify(b, "tools/verify_resource_registration.py", &.{});
     registration_verify.step.dependOn(portable_step);
     registration_step.dependOn(&registration_verify.step);
+    const work_documents_step = b.step("verify-work-documents", "Verify working drafts, fixed inputs and persistent receipts on actual artifacts");
+    const work_documents_verify = pack_support.verify(b, "tools/verify_work_documents.py", &.{});
+    work_documents_verify.step.dependOn(portable_step);
+    work_documents_step.dependOn(&work_documents_verify.step);
     const host_transport_step = b.step("verify-host-transport", "Verify Host pipe cancellation and stalled peer recovery");
     const host_transport_verify = pack_support.verify(b, "tools/verify_host_transport.py", &.{});
     host_transport_verify.step.dependOn(portable_step);
@@ -562,7 +566,7 @@ pub fn build(b: *std.Build) void {
         "escapement",        "playback",        "assets",        "external_sources",  "resource_library",
         "apps",              "render",          "capabilities",  "vm_pack",           "document_commands",
         "document_requests", "job_ledger",      "export_inputs", "resource_versions", "resource_requests",
-        "request_receipts",  "source_boundary",
+        "request_receipts",  "source_boundary", "work_files",    "work_requests",
     }) |name| runtime_suites.add("runtime/" ++ name ++ ".zig");
     inline for (.{ "command", "tasks", "task_journal", "history", "history_journal", "documents" }) |name|
         test_support.addSource(b, test_step, "runtime/" ++ name ++ ".zig", target, optimize, &.{.{ .name = "vne", .module = vne }});

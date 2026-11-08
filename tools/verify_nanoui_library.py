@@ -35,6 +35,7 @@ def successful_frontend(executable: Path, mode: str, data: Path, default_paths: 
     required = (
         "CUTRANS_SHELL_PRECHECK_OK id=nanoui-library",
         "CUTRANS_NANOUI_LIBRARY_OK",
+        "CUTRANS_NANOUI_WORK_OK",
         "CUTRANS_NANOUI_D3D_OK",
         "CUTRANS_NANOUI_DYNAMIC_OK",
         "CUTRANS_SHELL_DETACHED",

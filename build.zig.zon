@@ -82,6 +82,7 @@
         "tools/verify_resource_operations.py",
         "tools/verify_resident_resources.py",
         "tools/verify_resource_registration.py",
+        "tools/verify_work_documents.py",
         "tools/verify_source_identity.py",
         "tools/verify_attach.py",
         "tools/verify_host.py",

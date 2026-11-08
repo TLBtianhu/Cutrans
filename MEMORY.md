@@ -67,6 +67,8 @@
 
 ## 最新实施记录
 
+- [2026-11-08 工作正文、草稿与固定版本分离](docs/memory/2026-11-08-work-documents.md)：Resource API v3、持久草稿与工作 revision、成功回执跨恢复、NanoUI 正文编辑及实际 DLL／Host 验收。
+
 - [2026-11-08 统一 NanoUI 前端与旧 UI 清理](docs/memory/2026-11-08-nanoui-unification.md)：主桌面、编辑器、资源库、CLI 与任务统一为 NanoUI；移除 zgui/zglfw/wgpu 与旧 CUI，保留 VM/Host 业务语义并补实际验证。
 
 - [2026-11-08 当前进度、遗留问题与后续顺序](docs/memory/2026-11-08-progress.md)：业务到C2c2，A／B主切片已验收、C未整体完成、D／E待办；集中登记工作正文、会话／求值、独立App、安全、安装、上游和缓存问题，下一片先做工作正文与固定版本分离。本次仅记忆归档。

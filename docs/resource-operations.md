@@ -2,7 +2,7 @@
 
 资源库是素材声明的真源，Station是当前活动对象，文档与Job持有指定内容版本。改变外部文件位置或库的当前版本，不应重写已有作品或活动对象。
 
-当前Resource API v2由ABI10的ShellApi getter、Runtime导出和Host RPC 26～28提供（v1最初在ABI9引入）。`shell/library_client.zig`保存完整候选、未确认请求与目录投影，并支持普通文件登记；完整候选恢复向导仍未接入，没有自动同步、版本列表或垃圾回收。
+当前Resource API v3由ABI10的ShellApi getter、Runtime导出和Host RPC 26～30提供（v1最初在ABI9引入，v2增加通用登记，v3增加工作正文）。`shell/library_client.zig`保存完整候选、未确认请求与目录投影，并支持普通文件登记；完整候选恢复向导仍未接入，没有自动同步、版本列表或垃圾回收。
 
 ## 两种明确意图
 
@@ -43,7 +43,7 @@
 
 `library.detach`优先从当前head匹配的完整Station原始字节发布独立内容，原件失联不再阻断该路径。只有旧head驻留时不能拿它倒退当前资源；没有匹配时仍可走既有严格来源读取。不可变版本损坏仍会拒绝，不能用RAM静默覆盖修复。成功保留ID、显示名、父级和原来历；失败保持原归属及Station。
 
-ABI10的Asset列表增加实际内容hash和来源观察状态，两套资源UI用公共helper精确选择head，并在新预览构建成功后替换旧预览。已有严格`asset.open`／`openVersion`／`source_read`不因RAM命中而跳过持久版本完整性检查。真实DLL／Host验证入口为`tools/verify_resident_resources.py`；真实GUI、完整恢复向导、通用文件／目录、可变owned工作文件及强制沙箱仍是后续能力。
+ABI10的Asset列表增加实际内容hash和来源观察状态，两套资源UI用公共helper精确选择head，并在新预览构建成功后替换旧预览。已有严格`asset.open`／`openVersion`／`source_read`不因RAM命中而跳过持久版本完整性检查。真实DLL／Host验证入口为`tools/verify_resident_resources.py`；真实GUI、完整恢复向导、通用文件／目录和强制沙箱仍是后续能力。可变owned工作正文见下文v3切片。
 
 ## 通用文件登记与App交付（C2c2）
 
@@ -56,3 +56,20 @@ Resource API v2保持原结构布局及RPC编号，拒绝v1请求／响应；Hos
 这也是入口级约束，旧外部URI与mount兼容读写路径尚未全部迁入新的口岸，不能称为VM全局IO中介。实际符号链接负例因Win32创建权限1314未覆盖；真实目录联接及硬链验证通过，完整证据见[C2c2实施记录](memory/2026-11-07-resource-registration.md)。
 
 `resource.acquire <id> <sha256>`先核对当前head，再复用完整RAM或执行通用只读加载。成功为accepted，调用方从asset列表按ID＋hash取handle，不能把命令的Job输出当handle。`shell.resource_delivery`将资源Ref与借用字节交给消费callback；支持格式由App决定，回调拒绝保留资源身份与驻留内容，交付可单独重试。登记回执与交付结果各自呈现，不以交付失败删除已登记资源。完整GUI拖放、跨进程App调度和目录交付继续后续。
+
+
+## 工作正文、草稿与固定版本（Resource API v3）
+
+v3在原Resource API尾部增加`work_snapshot`与`work_submit`，主Shell ABI仍为10，原登记／重定位／采用请求布局及RPC编号不变。新增工作快照RPC29、工作提交RPC30；线格式显式编码结构版本、长度和正文，不跨进程传递指针。旧v1／v2 Resource API客户端须显式升级，不能按相同包版本猜测表长。
+
+工作操作包括`create`、`save_draft`、`commit`和`discard`。`create`建立owned资源及工作revision 1；`save_draft`只保存草稿，不推进工作revision，也不替换正式Station输入；`commit`核对draft token和`base_revision`后推进一次工作revision并清除对应草稿元数据；`discard`只丢弃指定token。草稿token全局单调且不复用。过期base可以保存以保护输入，但提交时必须是当前工作revision，冲突保留草稿而不覆盖。
+
+正文分别发布到`library/work/<id>/<revision>.bin`和`library/drafts/<id>/<token>.bin`。完整字节写入并同步后才原子提交Catalog v3；目录、草稿元数据与成功回执在同一Catalog提交生效。未引用候选不猜作垃圾自动删除，也不宣称文件与目录构成跨文件原子事务。当前正文和草稿单份上限16MiB，NanoUI文本编辑另限1MiB有效UTF-8且无NUL；其它二进制仍按素材处理。
+
+`work_snapshot`优先返回已持久草稿，否则返回当前工作正文，携工作revision、编辑base、draft token、来源类型和双向hash。两次读取必须属于同一快照，否则拒绝拼接。`readVersion`与Document／History／Job继续按原hash读取已采用固定版本，工作头前进不会重写旧输入；未被采用且未留存的旧工作字节不承诺永久恢复。
+
+成功工作回执与Catalog一起持久化，最近64条且不做静默淘汰，达到上限明确拒绝。原client＋sequence先查回执再检查当前revision，跨Runtime重放不重复创建或提交；失败与拒绝回执只保留当前Runtime的既有有界请求簿语义，不宣称所有错误均跨重启恢复。Shell编辑队列仍不自动跨重启重放，重新打开先恢复已确认草稿，不盲目提交。
+
+NanoUI资源库可新建工作正文，自动保存草稿，Ctrl+S／“保存正文”提交。编辑同时只发一个待确认请求，后续输入留在UI；旧快照不覆盖脏正文，导航和窗口关闭会阻止丢失未确认输入。输入预检、组合输入事务和有界撤销在项目适配层实现，未修改NanoUI vendor。真实中文输入法、系统剪贴板、可见窗口手感和完整安装验收仍需单独进行。
+
+实际入口为`tools/verify_work_documents.py`（真实DLL／Host、旧导出、丢回复、冷恢复）和`tools/verify_nanoui_library.py`（真实前端草稿／提交／关闭保护）。普通工作文件与作品固定版本已分离，但共享异步求值、完整FrameLease、通用目录、完整恢复向导、跨文件通用事务和垃圾回收仍未完成。

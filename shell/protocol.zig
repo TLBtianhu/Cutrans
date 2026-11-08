@@ -1,6 +1,7 @@
 const std = @import("std");
 pub const workspace_wire = @import("workspace_wire.zig");
 pub const resource_wire = @import("resource_wire.zig");
+pub const work_wire = @import("work_wire.zig");
 
 pub const header_size = 32;
 pub const max_payload = 16 * 1024 * 1024 + 1024 * 1024;
@@ -36,6 +37,8 @@ pub const Kind = enum(u32) {
     resource_snapshot = 26,
     resource_probe = 27,
     resource_submit = 28,
+    work_snapshot = 29,
+    work_submit = 30,
 };
 
 pub const source_read_version: u32 = 1;

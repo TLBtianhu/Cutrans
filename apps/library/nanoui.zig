@@ -74,6 +74,7 @@ fn verify(state: *State, config: *const abi.ShellConfig) !void {
     const resource_dir = try requiredPath(config.resource_dir);
     const path = try std.fs.path.join(state.allocator, &.{ resource_dir, "assets/examples/pngtest.png" });
     defer state.allocator.free(path);
+    std.debug.print("CUTRANS_NANOUI_FIXTURE path={s}\n", .{path});
     const library_id = blk: {
         _ = try state.importExternal(path);
         break :blk state.selected_library;
@@ -138,6 +139,28 @@ fn verify(state: *State, config: *const abi.ShellConfig) !void {
         else => {},
     };
     try std.testing.expect(visible_label);
+
+    try tester.clickText("新建工作正文");
+    const text_id = state.selected_library;
+    try std.testing.expect(text_id != 0 and text_id != library_id and state.work.?.editor != null);
+    try state.work.?.editor.?.editor.paste("第一行\r\n第二行");
+    tester.frame();
+    tester.frame();
+    try std.testing.expect(state.work.?.editor.?.draft_revision != 0);
+    try std.testing.expectEqual(@as(u64, 1), state.work.?.editor.?.work_revision);
+    try tester.clickText("保存正文");
+    tester.frame();
+    try std.testing.expectEqual(@as(u64, 2), state.work.?.editor.?.work_revision);
+    try std.testing.expectEqual(@as(u64, 0), state.work.?.editor.?.draft_revision);
+    try state.work.?.editor.?.editor.paste("关闭前需要保护的正文");
+    tester.frame();
+    try std.testing.expect(State.shouldClose(state, undefined));
+    try std.testing.expect(state.work.?.editor.?.draft_revision != 0);
+    try std.testing.expectEqual(@as(u64, 2), state.work.?.editor.?.work_revision);
+    try state.selectLibrary(library_id);
+    try std.testing.expect(state.preview != null and state.work.?.editor == null);
+    std.debug.print("CUTRANS_NANOUI_WORK_OK create=1 multiline=1 draft=1 commit=2 close_guard=1\n", .{});
+
     const final = try tester.render(state.allocator);
     defer final.deinit(state.allocator);
     try std.testing.expect(final.width == 900 and final.height == 700);
@@ -150,7 +173,9 @@ fn verify(state: *State, config: *const abi.ShellConfig) !void {
 pub fn run(init: std.process.Init, config: *const abi.ShellConfig, api: *const abi.ShellApi) !void {
     if (config.struct_size < @sizeOf(abi.ShellConfig) or config.abi_version != abi.version or config.reserved != 0) return error.InvalidShellConfig;
     if (config.playback_frames != 0 or config.asset_workspace > 1) return error.InvalidShellConfig;
-    var state = try State.init(init.gpa, api);
+    var io_state = std.Io.Threaded.init(init.gpa, .{});
+    defer io_state.deinit();
+    var state = try State.init(init.gpa, api, io_state.io());
     defer state.deinit();
     if (config.asset_workspace == 1) return verify(&state, config);
 
@@ -161,6 +186,7 @@ pub fn run(init: std.process.Init, config: *const abi.ShellConfig, api: *const a
         .width = 1180,
         .height = 760,
         .theme = library_view.metalTheme(),
+        .should_close = .{ .ctx = &state, .func = State.shouldClose },
         .content = .{ .view = .init(&state, library_view.view) },
     });
     try app.run();

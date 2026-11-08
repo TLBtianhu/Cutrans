@@ -146,7 +146,11 @@ pub const Preview = struct {
 pub fn previewPng(allocator: std.mem.Allocator, api: *const abi.ShellApi, handle: u64, expected_hash: ?[32]u8) !Preview {
     try validateApi(api);
     var info: abi.AssetInfo = undefined;
-    if (api.asset_preview(api.context, handle, &info) != abi.Status.ok) return error.AssetPreviewFailed;
+    const preview_status = api.asset_preview(api.context, handle, &info);
+    if (preview_status != abi.Status.ok) {
+        std.debug.print("CUTRANS_ASSET_PREVIEW_FAIL handle={d} status={d}\n", .{ handle, preview_status });
+        return error.AssetPreviewFailed;
+    }
     if (info.struct_size < @sizeOf(abi.AssetInfo) or info.abi_version != abi.version or info.handle != handle or info.media_kind != 1 or info.coverage != 1 or info.width == 0 or info.height == 0 or info.reserved != 0) return error.InvalidAssetPreview;
     if (expected_hash) |expected| {
         if (!std.mem.eql(u8, &expected, &info.content_hash)) return error.SourceContentMismatch;

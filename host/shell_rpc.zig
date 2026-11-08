@@ -132,6 +132,51 @@ fn resourceSubmit(allocator: std.mem.Allocator, api: *const resource.Api, payloa
     return .{ .payload = bytes, .allocator = allocator };
 }
 
+fn workSnapshot(allocator: std.mem.Allocator, api: *const resource.Api, id: u64, payload: []const u8) !Reply {
+    if (id == 0) return error.InvalidRpcPayload;
+    const expected: ?resource.WorkSnapshot = if (payload.len == 0) null else protocol.work_wire.readSnapshot(payload) catch return error.InvalidRpcPayload;
+    var metadata: resource.WorkSnapshot = undefined;
+    var required: usize = 0;
+    const query = api.work_snapshot(api.context, id, null, &metadata, null, 0, &required);
+    if (query != abi.Status.buffer_too_small) return .{ .status = if (query == abi.Status.ok) abi.Status.failed else query };
+    var encoded: [protocol.work_wire.snapshot_size]u8 = undefined;
+    _ = protocol.work_wire.writeSnapshot(&encoded, metadata) catch return error.InvalidRpcPayload;
+    if (required != metadata.body_len or required > protocol.max_payload - protocol.work_wire.snapshot_size) return error.InvalidRpcPayload;
+    if (expected) |value| if (!std.meta.eql(value, metadata)) return .{ .status = resource.Status.stale_version };
+    const bytes = try allocator.alloc(u8, protocol.work_wire.snapshot_size + required);
+    errdefer allocator.free(bytes);
+    var actual: resource.WorkSnapshot = undefined;
+    var copied: usize = 0;
+    const status = api.work_snapshot(api.context, id, &metadata, &actual, bytes[protocol.work_wire.snapshot_size..].ptr, required, &copied);
+    if (status != abi.Status.ok) {
+        allocator.free(bytes);
+        return .{ .status = status };
+    }
+    if (copied != required or !std.meta.eql(actual, metadata)) return error.InvalidRpcPayload;
+    const body = bytes[protocol.work_wire.snapshot_size..];
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(body, &digest, .{});
+    if (!std.mem.eql(u8, &digest, &actual.body_hash)) return error.InvalidRpcPayload;
+    _ = protocol.work_wire.writeSnapshot(bytes, actual) catch return error.InvalidRpcPayload;
+    return .{ .payload = bytes, .allocator = allocator };
+}
+
+fn workSubmit(allocator: std.mem.Allocator, api: *const resource.Api, payload: []const u8) !Reply {
+    const decoded = protocol.work_wire.readRequest(payload) catch return error.InvalidRpcPayload;
+    const bytes = try allocator.alloc(u8, protocol.work_wire.outcome_size);
+    errdefer allocator.free(bytes);
+    var outcome: resource.WorkOutcome = undefined;
+    const status = api.work_submit(api.context, &decoded.value, &outcome);
+    if (status != abi.Status.ok) {
+        allocator.free(bytes);
+        return .{ .status = status };
+    }
+    if (outcome.sequence != decoded.value.sequence) return error.InvalidRpcPayload;
+    if (outcome.status == abi.Status.ok and (outcome.resource_id == 0 or outcome.work_revision == 0)) return error.InvalidRpcPayload;
+    _ = protocol.work_wire.writeOutcome(bytes, outcome) catch return error.InvalidRpcPayload;
+    return .{ .payload = bytes, .allocator = allocator };
+}
+
 fn readBuffer(allocator: std.mem.Allocator, function: anytype, context: ?*anyopaque, id: u64) !Reply {
     var required: usize = 0;
     const size_status = function(context, id, null, 0, &required);
@@ -239,6 +284,17 @@ pub fn call(allocator: std.mem.Allocator, api: *const abi.ShellApi, grant_extern
             const status = workspaceApi(api, &api_v1);
             if (status != abi.Status.ok) return .{ .status = status };
             return workspaceSubmit(allocator, &api_v1, payload);
+        },
+        .work_snapshot, .work_submit => {
+            var authority: resource.Api = undefined;
+            const status = resourceApi(api, &authority);
+            if (status != abi.Status.ok) return .{ .status = status };
+            if (request.kind == .work_snapshot) {
+                if (request.id == 0) return error.InvalidRpcPayload;
+                return workSnapshot(allocator, &authority, request.id, payload);
+            }
+            if (request.id != 0) return error.InvalidRpcPayload;
+            return workSubmit(allocator, &authority, payload);
         },
         .command_result => {
             const strings = try commandPayload(payload);
@@ -402,7 +458,18 @@ const ResourceMock = struct {
     fn getApi(pointer: ?*anyopaque, out: ?*resource.Api) callconv(.c) i32 {
         const self: *ResourceMock = @ptrCast(@alignCast(pointer.?));
         self.getters += 1;
-        out.?.* = .{ .context = self, .snapshot = snapshot, .probe = probe, .submit = submit };
+        out.?.* = .{ .context = self, .snapshot = snapshot, .probe = probe, .submit = submit, .work_snapshot = workSnapshotMock, .work_submit = workSubmitMock };
+        return abi.Status.ok;
+    }
+
+    fn workSnapshotMock(_: ?*anyopaque, _: u64, _: ?*const resource.WorkSnapshot, _: ?*resource.WorkSnapshot, _: ?[*]u8, _: usize, _: ?*usize) callconv(.c) i32 {
+        return abi.Status.not_ready;
+    }
+
+    fn workSubmitMock(pointer: ?*anyopaque, request: ?*const resource.WorkRequest, out: ?*resource.WorkOutcome) callconv(.c) i32 {
+        const self: *ResourceMock = @ptrCast(@alignCast(pointer.?));
+        self.submits += 1;
+        out.?.* = .{ .status = abi.Status.ok, .disposition = @backingInt(resource.Disposition.replayed), .sequence = request.?.sequence, .stamp = .{ .epoch_hi = 7, .epoch_lo = 8 }, .resource_id = 1, .work_revision = 1, .draft_revision = 0, .content_hash = @splat(0) };
         return abi.Status.ok;
     }
 
@@ -579,4 +646,19 @@ test "Host source reading enforces table tail framing and never publishes a fail
     bytes[12] = 1;
     try std.testing.expectError(error.InvalidRpcPayload, call(std.testing.allocator, &api, WorkspaceMock.noGrant, request, bytes));
     try std.testing.expectEqual(@as(usize, 4), mock.calls);
+}
+
+test "work Host accepts the Python request and returns its fixed outcome" {
+    const hex = "600000000300000001d300000000000002d3000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000d000000000000000800000000000000686f73742d6e6f74652e747874686f7374206f6c64";
+    var bytes: [101]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&bytes, hex);
+    var mock: ResourceMock = .{};
+    const api = mock.shellApi();
+    var reply = try call(std.testing.allocator, &api, WorkspaceMock.noGrant, .{ .kind = .work_submit, .payload_len = bytes.len }, &bytes);
+    defer reply.deinit();
+    try std.testing.expectEqual(abi.Status.ok, reply.status);
+    const outcome = try protocol.work_wire.readOutcome(reply.payload);
+    try std.testing.expectEqual(@as(u64, 1), outcome.sequence);
+    try std.testing.expectEqual(@as(u64, 1), outcome.resource_id);
+    try std.testing.expectEqual(@as(u64, 1), outcome.work_revision);
 }

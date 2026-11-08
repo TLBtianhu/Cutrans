@@ -17,6 +17,7 @@ pub const State = struct {
     selected_library: u64 = 0,
     selected_handle: u64 = 0,
     preview: ?mirror.Preview = null,
+    work: ?@import("work_model.zig").Model = null,
     menu_open: bool = false,
     menu_target: u64 = 0,
     menu_anchor: ?nanoui.ui.Rect = null,
@@ -27,11 +28,12 @@ pub const State = struct {
     status_storage: [320]u8 = @splat(0),
     status_len: usize = 0,
 
-    pub fn init(allocator: std.mem.Allocator, api: *const abi.ShellApi) !State {
+    pub fn init(allocator: std.mem.Allocator, api: *const abi.ShellApi, io: ?std.Io) !State {
         // Validate the readable ABI prefix before copying an enlarged table.
         if (!api.isCurrent()) return error.InvalidShellApi;
         if (api.context == null) return error.MissingRuntimeHandle;
         var self: State = .{ .allocator = allocator, .api = api.* };
+        self.work = @import("work_model.zig").Model.init(allocator, api, io);
         errdefer self.deinit();
         try self.sync();
         self.setStatus("资源库已连接；选择素材即可预览", .{});
@@ -40,11 +42,18 @@ pub const State = struct {
 
     pub fn deinit(self: *State) void {
         self.clearPreview();
+        if (self.work) |*work| work.deinit();
         self.catalog.deinit(self.allocator);
         self.assets.deinit(self.allocator);
         self.rename_buffer.deinit();
         self.new_folder_buffer.deinit();
         self.api = undefined;
+    }
+
+    pub fn shouldClose(pointer: *anyopaque, _: *nanoui.Window) bool {
+        const self: *State = @ptrCast(@alignCast(pointer));
+        if (self.work) |*work| return work.beforeClose();
+        return true;
     }
 
     pub fn setStatus(self: *State, comptime fmt: []const u8, args: anytype) void {
@@ -74,6 +83,7 @@ pub const State = struct {
     pub fn sync(self: *State) !void {
         try mirror.syncLibrary(self.allocator, &self.api, &self.catalog);
         try mirror.syncAssets(self.allocator, &self.api, &self.assets);
+        if (self.work) |*work| try work.pump();
     }
 
     fn command(self: *State, name: []const u8, arg: []const u8) !void {
@@ -85,6 +95,7 @@ pub const State = struct {
             const folder = self.catalog.find(id) orelse return error.InvalidLibraryFolder;
             if (folder.node_kind != .folder) return error.InvalidLibraryFolder;
         }
+        if (self.work) |*work| try work.close();
         self.selected_folder = id;
         self.selected_library = 0;
         self.rename_target = 0;
@@ -93,6 +104,22 @@ pub const State = struct {
 
     pub fn selectLibrary(self: *State, id: u64) !void {
         const item = self.catalog.findResource(id) orelse return error.InvalidLibraryResource;
+        if (self.work) |*work| {
+            if (item.kind.? == .owned) {
+                work.open(id) catch |err| switch (err) {
+                    error.UnsupportedWorkText, error.NotWorkResource => try work.close(),
+                    else => return err,
+                };
+                if (work.editor != null) {
+                    self.clearPreview();
+                    self.selected_library = id;
+                    self.selected_folder = item.parent_id;
+                    self.setStatus("工作正文 · 自动保存草稿，Ctrl+S 提交", .{});
+                    return;
+                }
+            }
+            if (work.editor != null) try work.close();
+        }
         const selected = try mirror.ensureLibrary(&self.api, self.allocator, &self.assets, id, item.content_hash);
         if (self.selected_handle == selected and self.preview != null) {
             self.selected_library = id;
@@ -107,6 +134,15 @@ pub const State = struct {
         self.selected_handle = selected;
         self.setStatus("PNG {d}×{d} · 完整预览", .{ self.preview.?.info.width, self.preview.?.info.height });
         std.debug.print("CUTRANS_NANOUI_PREVIEW library={d} asset={d} width={d} height={d}\n", .{ id, selected, self.preview.?.info.width, self.preview.?.info.height });
+    }
+
+    pub fn createText(self: *State, label: []const u8) !u64 {
+        const work = if (self.work) |*value| value else return error.WorkApiUnavailable;
+        const id = try work.create(label);
+        try self.sync();
+        try self.selectLibrary(id);
+        self.setStatus("已创建工作正文；输入会自动保存为草稿", .{});
+        return id;
     }
 
     pub fn checkSelectedSource(self: *State) !void {

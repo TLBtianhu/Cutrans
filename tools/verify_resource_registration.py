@@ -376,20 +376,20 @@ def native_versions(dll, runtime_dir, root, evidence):
         query = ProbeRequest(c.sizeof(ProbeRequest), 1, Stamp(*before["stamp"]), 0, REGISTER, 0, path)
         output = Proof()
         require(runtime.resources.probe(runtime.handle, c.byref(query), c.byref(output)) == ABI_MISMATCH,
-            "resource API v2 accepted a v1 probe layout/version")
+            "resource API v3 accepted a v1 probe layout/version")
         proof = runtime.probe(source, REGISTER, 0)
         operation = request(proof, source, client=(0xC2C203, 1))
         operation.api_version = 1
         outcome = Outcome()
         require(runtime.resources.submit(runtime.handle, c.byref(operation), c.byref(outcome)) == ABI_MISMATCH,
-            "resource API v2 accepted a v1 submit layout/version")
+            "resource API v3 accepted a v1 submit layout/version")
         require(runtime.view() == before and resource_files(runtime.data) == files and not station(runtime)[1],
             "v1 resource ABI rejection had side effects")
         operation.api_version = RESOURCE_API_VERSION
         first = runtime.apply(operation, disposition=1)
         require(first.resource_id > 0 and len(runtime.view()["body"]["resources"]) == 1,
-            "rejected v1 request consumed the valid v2 sequence")
-        evidence["checks"].append("DLL_resource_v1_probe_and_submit_rejected_without_mutation_or_consuming_v2_sequence")
+            "rejected v1 request consumed the valid v3 sequence")
+        evidence["checks"].append("DLL_resource_v1_probe_and_submit_rejected_without_mutation_or_consuming_v3_sequence")
     finally:
         runtime.close()
 
@@ -495,7 +495,7 @@ def host_case(console, root, evidence):
             refs.append((rid, path, content))
             old_epoch = operation
         require(not retained_files(data), "Host registration/consumer rejection copied reference bytes to permanent versions")
-        evidence["checks"].append("Host_v2_register_lost_reply_exact_token_replay_generic_delivery_and_independent_PNG_consumer_support")
+        evidence["checks"].append("Host_v3_register_lost_reply_exact_token_replay_generic_delivery_and_independent_PNG_consumer_support")
         evidence["checks"].append("Host_v1_resource_probe_submit_rejected_without_side_effect_or_sequence_consumption")
         body = host_view(wire)["body"]
         _, final = invoke(console, "stop", data, "portable")
@@ -525,7 +525,7 @@ def main():
     parser.add_argument("--root", type=Path, default=default_root("resource-registration"))
     args = parser.parse_args()
     require(os.name == "nt", "actual registration DLL/Host verification requires Windows")
-    require(RESOURCE_API_VERSION == 2 and identity()["host_api"] >= 10, "registration fixture requires resource API v2 and ABI10")
+    require(RESOURCE_API_VERSION == 3 and identity()["host_api"] >= 10, "registration fixture requires resource API v3 and ABI10")
     root = claim(args.root)
     portable = (OUTPUT / "portable").resolve()
     before = hashes(portable)

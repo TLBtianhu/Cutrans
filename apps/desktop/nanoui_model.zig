@@ -59,7 +59,7 @@ pub const State = struct {
         try vm_client.register(&self.ctx);
         self.editor = editor_view.State.init(&self.ctx);
         errdefer self.editor.deinit();
-        self.library = try library_view.State.init(allocator, api);
+        self.library = try library_view.State.init(allocator, api, self.ctx.io);
         errdefer self.library.deinit();
         self.console = console_view.State.init(&self.ctx);
         self.library.on_insert = .{ .context = self, .run = insertLibrary };

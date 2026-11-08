@@ -34,3 +34,5 @@ pub const export_inputs = @import("export_inputs.zig");
 pub const external_sources = @import("external_sources.zig");
 pub const library = @import("resource_library.zig");
 pub const resource_versions = @import("resource_versions.zig");
+pub const work_files = @import("work_files.zig");
+pub const work_requests = @import("work_requests.zig");

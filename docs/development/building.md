@@ -49,7 +49,7 @@ NanoUI `0.12.0`（fork `00e5813`）的固定源码副本位于 `third_party/nano
 | NanoUI源码／前端编译 | `test-nanoui`、`test-nanoui-desktop`、`test-nanoui-library` |
 | 分发组装 | `install`、`portable`、`runtime-pack`、`shell-pack`、`nanoui-library-pack`、`library-probe` |
 | 文档／作业实际产物 | `verify-edit-commit`、`verify-workspace`、`verify-workspace-rpc`、`verify-jobs`、`verify-jobs-async` |
-| 资源实际产物 | `verify-assets`、`verify-resource-versions`、`verify-source-identity`、`verify-resource-operations`、`verify-resident-resources`、`verify-resource-registration` |
+| 资源实际产物 | `verify-assets`、`verify-resource-versions`、`verify-source-identity`、`verify-resource-operations`、`verify-resident-resources`、`verify-resource-registration`、`verify-work-documents` |
 | Host／协议／回放 | `verify-host`、`verify-host-transport`、`verify-runtime`、`verify-replay`、`verify-input`、`verify-playback` |
 | 自动化／环境 | `verify-automation`、`verify-isolation`、`diag-user` |
 | Shell／GUI集成，单独安排 | `verify-shell`、`verify-attach`、`verify-nanoui-library`、`verify-nanoui-portable` |

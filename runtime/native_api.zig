@@ -21,6 +21,7 @@ const Runtime = struct {
     mutex: std.Io.Mutex,
     requests: document_requests.Registry,
     resource_registry: resource_requests.Registry,
+    work_registry: @import("work_requests.zig").Registry,
     execution_gate: std.Io.Mutex = .init,
     work_ready: std.Io.Semaphore = .{},
     work_done: std.Io.Semaphore = .{},
@@ -66,6 +67,8 @@ const Runtime = struct {
         errdefer self.requests.deinit();
         self.resource_registry = resource_requests.Registry.init(allocator);
         errdefer self.resource_registry.deinit();
+        self.work_registry = @import("work_requests.zig").Registry.init(allocator);
+        errdefer self.work_registry.deinit();
         try self.io.io().randomSecure(std.mem.asBytes(&self.epoch));
         if (self.epoch[0] == 0 and self.epoch[1] == 0) return error.EntropyUnavailable;
         self.ctx.init(allocator);
@@ -103,6 +106,7 @@ const Runtime = struct {
         self.jobs_gate.unlock(io_value);
         self.requests.deinit();
         self.resource_registry.deinit();
+        self.work_registry.deinit();
         self.input_recording.deinit();
         self.ctx.deinit();
         self.io.deinit();
@@ -277,6 +281,45 @@ const Runtime = struct {
         }
     };
 
+    const WorkSnapshotTask = struct {
+        runtime: *Runtime,
+        id: u64,
+        expected: ?resource_api.WorkSnapshot,
+        out: *resource_api.WorkSnapshot,
+        buffer: ?[*]u8,
+        capacity: usize,
+        length: *usize,
+        result: i32 = abi.Status.failed,
+
+        fn run(self: *@This()) void {
+            var snapshot = @import("work_requests.zig").readSnapshot(&self.runtime.ctx, self.runtime.epoch, self.id) catch |err| {
+                self.result = @import("work_requests.zig").status(err);
+                return;
+            };
+            defer snapshot.deinit(allocator);
+            if (self.expected) |expected| {
+                if (!std.meta.eql(expected, snapshot.metadata)) {
+                    self.result = resource_api.Status.stale_version;
+                    return;
+                }
+            }
+            self.out.* = snapshot.metadata;
+            self.result = copyBytes(snapshot.bytes, self.buffer, self.capacity, self.length);
+        }
+    };
+
+    const WorkSubmitTask = struct {
+        runtime: *Runtime,
+        request: *const resource_api.WorkRequest,
+        label: []const u8,
+        body: []const u8,
+        result: anyerror!resource_api.WorkOutcome = undefined,
+
+        fn run(self: *@This()) void {
+            self.result = self.runtime.work_registry.submit(&self.runtime.ctx, self.runtime.epoch, self.request, self.label, self.body);
+        }
+    };
+
     const FlushTask = struct {
         runtime: *Runtime,
         result: anyerror!void = undefined,
@@ -433,7 +476,43 @@ export fn cutrans_vm_workspace_api(handle: ?*anyopaque, out_api: ?*workspace.Api
 export fn cutrans_vm_resource_api(handle: ?*anyopaque, out_api: ?*resource_api.Api) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     const out = out_api orelse return abi.Status.invalid_arguments;
-    out.* = .{ .context = runtime, .snapshot = cutrans_vm_resource_snapshot, .probe = cutrans_vm_resource_probe, .submit = cutrans_vm_resource_submit };
+    out.* = .{
+        .context = runtime,
+        .snapshot = cutrans_vm_resource_snapshot,
+        .probe = cutrans_vm_resource_probe,
+        .submit = cutrans_vm_resource_submit,
+        .work_snapshot = cutrans_vm_work_snapshot,
+        .work_submit = cutrans_vm_work_submit,
+    };
+    return abi.Status.ok;
+}
+
+export fn cutrans_vm_work_snapshot(handle: ?*anyopaque, id: u64, expected: ?*const resource_api.WorkSnapshot, out_snapshot: ?*resource_api.WorkSnapshot, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32 {
+    const required = out_len orelse return abi.Status.invalid_arguments;
+    required.* = 0;
+    const out = out_snapshot orelse return abi.Status.invalid_arguments;
+    if (id == 0 or (buffer != null and expected == null)) return abi.Status.invalid_arguments;
+    if (expected) |value| {
+        if (value.struct_size != @sizeOf(resource_api.WorkSnapshot) or value.api_version != resource_api.version) return abi.Status.abi_mismatch;
+        if (value.resource_id != id or value.reserved != 0) return abi.Status.invalid_arguments;
+    }
+    const runtime = from(handle) catch |err| return report(err);
+    var task = Runtime.WorkSnapshotTask{ .runtime = runtime, .id = id, .expected = if (expected) |value| value.* else null, .out = out, .buffer = buffer, .capacity = buffer_len, .length = required };
+    runtime.execute(Runtime.WorkSnapshotTask, &task);
+    return task.result;
+}
+
+export fn cutrans_vm_work_submit(handle: ?*anyopaque, request: ?*const resource_api.WorkRequest, out_outcome: ?*resource_api.WorkOutcome) callconv(.c) i32 {
+    const value = request orelse return abi.Status.invalid_arguments;
+    const out = out_outcome orelse return abi.Status.invalid_arguments;
+    if (value.struct_size != @sizeOf(resource_api.WorkRequest) or value.api_version != resource_api.version) return abi.Status.abi_mismatch;
+    if (!resource_api.validWorkRequest(value)) return abi.Status.invalid_arguments;
+    const label = if (value.label.len == 0) "" else value.label.ptr.?[0..value.label.len];
+    const body = if (value.body.len == 0) "" else value.body.ptr.?[0..value.body.len];
+    const runtime = from(handle) catch |err| return report(err);
+    var task = Runtime.WorkSubmitTask{ .runtime = runtime, .request = value, .label = label, .body = body };
+    runtime.execute(Runtime.WorkSubmitTask, &task);
+    out.* = task.result catch |err| return @import("work_requests.zig").status(err);
     return abi.Status.ok;
 }
 

@@ -150,6 +150,7 @@ pub fn run(init: std.process.Init, config: *const abi.ShellConfig, api: *const a
         .height = 800,
         .theme = view.theme(),
         .on_present = .{ .ctx = state, .func = model.State.onPresent },
+        .should_close = .{ .ctx = state, .func = library.State.shouldClose },
         .content = .{ .view = .init(state, model.State.view) },
     });
     if (config.playback_frames > 0) {
