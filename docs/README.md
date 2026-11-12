@@ -21,6 +21,7 @@
 - [项目记忆](../MEMORY.md)：宪法、主题索引和最新实施记录。
 - [现役状态](memory/current.md)：当前实现、原型限额和未完成范围。
 - [目录成员显式收纳](memory/2026-11-12-directory-member-collection.md)：本机文件收录到同名逻辑文件夹、成员关系与隐藏 GUI 验证。
+- [架构评审与收敛方案（建议，未实施）](memory/2026-11-12-architecture-review.md)：清晰度标准、结构债与分阶段收敛路线。
 - [未决请求：停止等待与跨 Shell 标记](memory/2026-11-12-pending-wait-stop.md)：`wrong_epoch` 清空、跨 Shell 提示、不重放和不重复提交。
 - [命令清单单一真源](memory/2026-11-12-command-manifest.md)：Shell／Runtime 命令分类集中维护。
 - [ABI 接线审计与构建残留清理](memory/2026-11-12-abi-and-staging-audit.md)：编译期强制点、旧 UI 残留清理。

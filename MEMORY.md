@@ -69,6 +69,8 @@
 
 ## 最新实施记录
 
+- [2026-11-12 架构评审与收敛方案（建议，未实施）](docs/memory/2026-11-12-architecture-review.md)：定义“清晰”的可验收标准，列出 Runtime 单体、命令/ABI 多处接线、持久格式分散等结构债，并提出契约冻结、单一真源、域接口、数据生命周期、测试与构建、产品硬化六阶段。**尚未批准或实施**；建议从阶段 0 + 命令 manifest v2 + `verify-contract` 开始。
+
 - [2026-11-12 目录成员显式收纳](docs/memory/2026-11-12-directory-member-collection.md)：本机文件页新增“收录到同名文件夹”，以当前目录名在资源库根下创建/复用文件夹，登记单个成员后用既有 `library.move` 建立 `parent_id` 关系；资源身份、内容哈希与来源授权不变。无新 ABI/命令/Catalog 格式；`verify-local-sources` 的隐藏 GUI 场景验证文件夹与成员关系。
 
 - [2026-11-12 未决请求：停止等待与跨 Shell 标记](docs/memory/2026-11-12-pending-wait-stop.md)：新增 `hasPending`/`abandonPending`，编辑器在结果未确认时显示警告和“停止等待未确认修改”；停止等待不重放、不回滚，镜像刷新后显示 VM 真实状态，后续编辑靠 expected stamp 防止静默覆盖。`data/shell/pending-unknown.txt` 让下一个 Shell 仍能看到“可能已执行”的提示，确认后清除；标记不携带可重放请求。单元测试、`test-nanoui-desktop`、`verify-payload` 与 `verify-unknown-result`（含真实 Host 丢回复 + 重启、Shell 退出后标记警告）通过；Host/Shell 两段已闭环，按钮点击与发行验收仍未覆盖。

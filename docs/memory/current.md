@@ -1,6 +1,6 @@
-# 现役状态（2026-11-09）
+# 现役状态（2026-11-12）
 
-这是当前实现的摘要。业务最近完成到C2c2；后续已完成工作正文、本机文件、环境启动屏障、同 EXE 进程角色、静态 Runtime、PayloadSource 与环境内安全退出切片，各次实际验收以对应记录为准。当前进度、剩余问题与接续顺序见[当前检查点](2026-11-09-checkpoint.md)；[旧进度台账](2026-11-08-progress.md)保留为历史记录。各次历史测试只证明当次代码及产物。
+这是当前实现的摘要。业务最近完成到 C2c3 第一片（目录成员显式收纳）；此前已完成工作正文、本机文件、环境启动屏障、同 EXE 进程角色、静态 Runtime、PayloadSource、环境内安全退出、Host 重连与未决结果闭环。各次实际验收以对应记录为准。当前进度、剩余问题与接续顺序见文末[2026-11-12 进度快照](#2026-11-12-进度快照)；[旧检查点](2026-11-09-checkpoint.md)与[旧进度台账](2026-11-08-progress.md)保留为历史记录。各次历史测试只证明当次代码及产物。
 
 ## 产品与边界
 
@@ -137,3 +137,19 @@ C2c2最终179/179构建步骤、新实际DLL／Host14组及同产物18项headles
 2026-11-12 目录成员显式收纳：本机文件页新增“收录到同名文件夹”，以当前目录名在资源库根下创建/复用逻辑文件夹，登记单个成员后用既有 `library.move` 建立 `parent_id` 关系；资源身份、内容哈希和来源授权不变，没有新增 ABI、命令或 Catalog 格式。`verify-local-sources` 的隐藏 GUI 场景断言文件夹与成员关系（`CUTRANS_LOCAL_FOLDER_OK`），DLL/Host/UI 回归通过。文件夹按标签复用，不记录源目录绝对路径，也不是目录整体收纳；真实 GUI/IME 与安装仍未验收。详见 [目录成员收纳](2026-11-12-directory-member-collection.md)。
 
 2026-11-12 未决请求停止等待（Host/Shell 两段闭环）：`vm_client` 新增 `hasPending`/`abandonPending`，编辑器在结果未确认时显示警告和“停止等待未确认修改”。停止等待只结束客户端等待，不重放也不回滚；刷新后的文档镜像显示 VM 真实状态，后续编辑用刷新后的 expected stamp 防止旧请求晚到造成静默覆盖。`data/shell/pending-unknown.txt` 在 Shell 重启后继续提示“可能已执行”，确认后清除且标记不携带可重放请求。新增 `verify-unknown-result`：真实 Host 提交后丢回复、Shell 保留 pending、重启后 `wrong_epoch` 清空且不重复提交、新 identity 显式编辑成功；并验证 pending 时 Shell 退出后下一个 Shell 打印 `CUTRANS_UNKNOWN_HISTORICAL` 并完成普通桌面场景。单元测试、`test-nanoui-desktop` 与 `verify-payload` 通过；按钮点击、取消/回滚协议、真实 GUI/IME 与安装验收仍未覆盖。详见 [停止等待入口](2026-11-12-pending-wait-stop.md)。
+
+## 2026-11-12 进度快照
+
+- 当前 `master` 为 `fdbe3ab6`，工作区干净，远端已同步。
+- 本日连续完成：
+  - `51efd2af` 命令清单单一真源；
+  - `a8769edb` ABI 接线审计与 portable 残留清理；
+  - `560868f9` 未决请求停止等待；
+  - `ad8af954` 真实 Host 丢回复 + 重启闭环；
+  - `1e82ecc1` 跨 Shell 未确认标记；
+  - `64f601ea` 闭环记忆；
+  - `56388fd3` 目录成员显式收纳；
+  - `fdbe3ab6` README／文档导航刷新，并确立“用户可见能力变化时同片更新 README”的长期规则。
+- 最近一次验证：`build test` `developer-118145594305/`、`test-nanoui-desktop` `developer-ae8b73268866/`、`verify-local-sources` `developer-593019ce8e31/`（证据 `local-sources-f511496e014d/`）、`verify-unknown-result` `developer-deaa34671ca8/`（证据 `unknown-result-acbfc979349f/`）、`verify-repository` `developer-8f6ba36f2578/`。
+- 当前边界：未决结果的 Host/Shell 两段已闭环；目录收纳只按标签复用逻辑文件夹，不记录源目录绝对路径，不是目录整体收纳；真实 GUI/IME、安装升级卸载和真实媒体仍未验收。
+- 下一步建议是[架构评审与收敛方案](2026-11-12-architecture-review.md)的阶段 0 + 命令 manifest v2 + `verify-contract`；该记录是**建议，未实施、未批准**。
