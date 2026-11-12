@@ -50,7 +50,9 @@ NanoUI 首页的“退出虚拟环境…”与窗口关闭不同：窗口关闭�
 | 当前已登记资源 | `asset.ensure <id> <sha256>`、`resource.acquire <id> <sha256>` |
 | 上次来源观察 | `asset.check <handle>` |
 | 旧授权确认 | `source.list`、`source.reauthorize`，详见[身份规则](../source-identity.md) |
-| 资源目录 | `library.refresh`、`library.detach`、`library.create`、`library.folder.create`、`library.rename`、`library.move`、`library.list` |
+| 资源目录 | `library.refresh`、`library.detach`、`library.create`、`library.folder.create`、`library.rename`、`library.move`、`library.remove`、`library.list` |
+
+`library.remove <id>` 删除一个库条目或一个空文件夹：条目仍被当前文档、History（含可重做分支）、排队／执行中导出或已加载对象使用，或有未提交草稿时返回 `invalid_state` 并打印 `CUTRANS_LIBRARY_REMOVE_REFUSED … holder=<document|history|export_job|station|none>`；终态归档作业不阻止删除，之后重试会明确报 `ResourceNotFound`。删除只改 Catalog，已留存版本、工作正文与草稿文件留在磁盘上，ID 不复用；引用该条目的工作回执随之清除，客户端高水位保留。删除最后一个仍引用某持久来源授权的引用条目时，若文档、History、导出与已加载对象也都不再引用它，该授权与来源记录一并释放（`released_grant=<id>`）。库条目或来源授权已满时，`library.create`、`library.folder.create`、资源登记与相关 ABI 调用返回 `queue_full`，界面显示 `ResourceCapacityReached`。
 
 资源登记不是一个假设中的`register_file <path>`文本命令：Resource API v2使用snapshot → probe(register_file) → submit，并以连续请求身份及回执处理未知结果。旧relocate／adopt继续校验PNG。真实接口与容量、权限、重试、失败规则见[资源契约](../resource-operations.md)。
 

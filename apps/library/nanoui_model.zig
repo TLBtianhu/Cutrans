@@ -100,7 +100,9 @@ pub const State = struct {
     }
 
     fn command(self: *State, name: []const u8, arg: []const u8) !void {
-        if (try mirror.command(&self.api, name, arg) != abi.Status.ok) return error.CommandFailed;
+        const result_code = try mirror.command(&self.api, name, arg);
+        if (result_code == abi.Status.queue_full) return error.ResourceCapacityReached;
+        if (result_code != abi.Status.ok) return error.CommandFailed;
     }
 
     pub fn selectFolder(self: *State, id: u64) !void {

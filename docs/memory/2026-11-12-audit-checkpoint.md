@@ -1,11 +1,14 @@
 # 2026-11-12 审计结论与进度检查点
 
+> **2026-11-12 评审修正**：本页由[评审交接](2026-11-12-review-handoff.md)复核。#9 表述、P0 分级与“下一步顺序”已按该页修正或取代，修正处就地标注；与评审交接冲突时以评审交接为准。
+
 本次会话做了三件事：一次全仓审计（只读）、切片 A（保存原子性）、切片 B（工作正文发布顺序）。本记录同时充当检查点：**审计发现只有在这里才落盘**，此前的架构评审记录（`2026-11-12-architecture-review.md`）只覆盖结构债，不含下面的授权面与运行时缺陷。
 
 ## 当前 Git 状态
 
 - `master` 已提交本会话全部内容：`0bc7ba51` 保存原子性与 v3 显式输出、`fb124808` 其后的记忆更新、`714ebafd` 工作正文发布顺序与草稿基线，以及本文件所在的记忆检查点提交。
 - 工作区干净。未推送：`master` 领先 `origin/master` 4 个提交。
+- （后续复核）这 4 个提交及检查点提交 `22cc8907` 已推送，`master` 与 `origin/master` 一致。
 
 ## 已修（本次会话）
 
@@ -17,7 +20,9 @@
 | Catalog 提交失败留下的未引用正文永久阻塞同一 revision 的重试 | `runtime/work_files.zig` 命名 | `2026-11-12-work-publication-order.md` |
 | `save_draft` 接受 `base < head`，`commit` 却要求相等 → 永远提交不了的草稿 | `runtime/resource_library.zig` 的 `saveWorkDraft` | 同上 |
 
-## 未修：P0（会导致用户数据被静默改写或越权）
+## 未修：P0（同用户完整性／正确性，含一个持久“砖化”；不是提权）
+
+> **威胁模型（评审修正）**：项目已声明自身不是沙箱，同用户进程本来就能直接改写 `session/runtime.lock` 或 `library/catalog.json`，无认证管道几乎不增加同用户攻击面。下面三项的真实危害是：授权决定搭在通用 RPC 字段上，任何把 `id` 置非零的代码路径都会持久改写选择锁，使后续正常启动撞 `ShellLockMismatch`；`.command_result` 让善意客户端（CLI、未来 agent）也能绕过受管语义造成静默覆盖。唯一跨用户角度是管道抢注：服务端用 `FILE_FLAG_FIRST_PIPE_INSTANCE`、`PIPE_REJECT_REMOTE_CLIENTS` 与默认 DACL，但客户端 `CreateFileW`（`ports/host_control.zig:121`）不核验服务端身份、管道名可预测，多用户机器上另一用户可在 Host 启动前抢注同名管道冒充 Host。该项已核码、未实测，归入“多用户／提权部署未验收”，不按 P0 处理。原标题为“会导致用户数据被静默改写或越权”。
 
 1. **迁移许可来自传输层字段**：`shell/client.zig:496` 把 `allow_migration` 塞进 RPC 通用 `id` 字段，`bootstrap/main.zig:863` 读 `request.rpc.?.id != 0` 当授权，`bootstrap/activation.zig:286-293` 据此**持久**改写 `session/runtime.lock`。任意同用户进程可伪造一次 `shell_commit` + `id=1` + 任意 identity，之后正常 GUI 启动在 `bootstrap/main.zig:926` 撞 `ShellLockMismatch`；若伪造成内置 sibling id 反而被当成"内置切换"静默放行。
 2. **本机 RPC 无对端认证**：`ports/host_control.zig:97` 用默认 DACL、管道名由 `sha256(data_dir)` 生成（`vne/host_protocol.zig:21`），请求头无 token。配合 3 可替换当前文档、取消全部作业、写任意已授权路径。
@@ -30,7 +35,7 @@
 6. **旧 `import` 通道绕过来源边界**：`runtime/external_sources.zig:238-281` 不走 `source_boundary.check`、不查 hardlink/final path（新口岸 `:102-123` 三者都查），可把 VM 私有文件登记成 owned 资源再导出；`:646-659` 的测试正把这个绕过当预期行为。
 7. **`asset.export` 目标可为 data 根下任意 `session://` 相对路径**（`runtime/assets.zig:396-401`）：`session://library/catalog.json` 会把 catalog 建成目录，下次启动 `Runtime.create` 失败，应用永久起不来，只能手删。
 8. **容量与回收**：外部来源 `[8]`（`runtime/external_sources.zig:132`）、授权槽 `[8]`（`vne/mounts.zig:16`）、库资源/文件夹各 `[32]`（`runtime/resource_library.zig:140,142`），**都没有删除入口**。录满后永久不能新增，删文件也不释放。授权槽还被 `doc.open`、`asset_open_external`、导出快照共用。
-9. **GUI 客户端落后不会重同步**：`apps/library/work_model.zig` 从不更新 `base_revision`；切片 B 之后，落后的保存会立即返回过期版本，页面停在拒绝状态，需要重开资源。
+9. **GUI 客户端落后不会重同步**（评审修正）：`apps/library/work_model.zig:240`、`:249` 在自身 commit／discard 后会更新 `base_revision`；真实缺口是收到 `stale_version`（`:154` 映射为 `"StaleWorkRevision"`）后没有任何重读快照／重同步路径。切片 B 之后，被其它客户端推进而落后的保存会立即返回过期版本，页面停在拒绝状态，需要重开资源。原表述“从不更新 `base_revision`”过重。
 
 ## 未修：P2 / 基础设施
 
@@ -44,7 +49,9 @@
 17. **`build test` 的构建运行器失败**：约 20 个测试二进制被标记 `failed command`，但单独运行同一二进制 **143/143 通过、退出 0**；HEAD 同样复现。运行器型失败不改变退出码（断言型才变 1），所以"退出 0"不能单独当全绿证据。
 18. 仓库体积：`.zig-cache` 51.95 GiB、`scratch` 15.42 GiB（1178 个验证目录、12.98 GiB）。证据"永不自动删除"是刻意设计，但没有预算。
 
-## 下一步顺序（建议）
+## 下一步顺序（建议，**已被取代**）
+
+> 本节已被[评审交接](2026-11-12-review-handoff.md)第四节及 [现役状态](current.md) 进度快照中用户确认的顺序取代；第 1 步的 `hasPending`/`abandonPending` 已在 `560868f9` 实现。以下保留原文作历史记录。
 
 1. GUI 重同步 + `hasPending`/`abandonPending`（修"落后即卡死、关不掉窗口"）。
 2. 容量与回收（`source.remove`/`library.remove`、槽位复用、容量错误显式化）。

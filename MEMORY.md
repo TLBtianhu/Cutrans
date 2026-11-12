@@ -69,6 +69,10 @@
 
 ## 最新实施记录
 
+- [2026-11-12 容量与回收（窄版）：本机已验证](docs/memory/2026-11-12-capacity-reclaim.md)：（本机验证补记）代码一次编译、零修改；`build test` 退出 0，三个被标失败的测试二进制单独运行全部通过，四个新测试 OK；`verify-assets` 新增真实 DLL 上的 `library.remove` 断言并修正自 11-07 起失效的 catalog 格式断言；architecture／work-documents／local-sources／repository 均通过。另发现 `verify-resource-registration` 受管根边界在 HEAD 上就已回归（未修，见 `current.md`）。以下为编写时原文——`library.remove`（只删无活引用的条目与空文件夹，终态归档作业不阻止，磁盘字节留作孤儿，ID 不复用，清理该资源的工作回执以免冷恢复失败）、最后引用删除时自动释放持久来源授权、库／授权槽满统一返回 `queue_full`（UI 显示 `ResourceCapacityReached`）、四个新测试。云端 Linux VM 无法运行 `tools/dev.ps1`，**全部未编译**、工作区未提交；由本机 Windows Claude Code 会话接手验证。**新会话先读这一页，再读评审交接。**
+
+- [2026-11-12 评审交接：审计复核、威胁模型校正与接续顺序](docs/memory/2026-11-12-review-handoff.md)：对审计检查点的四处修正（#9 表述、冲突的下一步清单、`current.md:141` 残留、`runtime.md` ABI/重连漂移）；P0 #1–#3 改判为同用户完整性而非提权，管道抢注归多用户未验收；新增发现“文档模型是格式死路”和“一切皆插件零实现”；商定顺序为容量回收（窄版）→ vne 测试根 → v4 格式 ADR → D 注册表 → 两项小修（两处调整已于后续会话由用户确认）。评审本身只读；其后已按第五节刷新 `current.md`、审计检查点与 `runtime.md`。**新会话先读审计检查点，再读这一页；两者冲突以本页为准。**
+
 - [2026-11-12 审计结论与进度检查点](docs/memory/2026-11-12-audit-checkpoint.md)：全仓审计的完整落盘（P0：RPC 迁移许可来自 wire、本机 RPC 无认证、`.command_result` 绕过受管语义；P1：Pack 校验与装载分离、payload 缓存根、旧 import 绕过来源边界、`asset.export` 目标无边界、容量无回收、GUI 落后不重同步；P2 与基础设施另列），加上本次两个切片已修/未修清单、复现命令与下一步顺序。**恢复会话先读这一页。** 功能提交见 `0bc7ba51` 与 `714ebafd`。
 
 - [2026-11-12 工作正文发布顺序与草稿基线](docs/memory/2026-11-12-work-publication-order.md)：`library/work|drafts/<id>/` 的正文与草稿改为「revision/token + 内容哈希」命名，旧 `<revision>.bin` 只读兼容；这样 Catalog 提交失败留下的未引用正文不会再让同一 revision 的重试撞上 `WorkContentMismatch`。`save_draft` 的 `base_revision` 现在必须等于当前工作头（原来保存接受 `base < head`、提交却要求相等，会写出一份永远提交不了的草稿）。`verify-work-documents`、`verify-architecture`、`verify-repository` 退出 0，`resource_library` 测试二进制单独运行 143/143 通过。同片修正上一片对锁测试的错误归因：两个锁测试**本身通过**，失败只出现在构建运行器路径（HEAD 同样复现，根因未定）。已提交 `714ebafd`。

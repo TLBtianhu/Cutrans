@@ -208,6 +208,28 @@ pub const Catalog = struct {
         return id;
     }
 
+    /// Drop one persistent grant after the caller proved nothing uses it. The
+    /// authorization file is saved before the in-memory grant is revoked, so a
+    /// failed save keeps both the record and the grant.
+    pub fn forget(self: *Catalog, ctx: *RuntimeContext, id: u64) !bool {
+        var index: usize = 0;
+        while (index < self.count and self.items[index].id != id) : (index += 1) {}
+        if (index == self.count) return false;
+        const removed = self.items[index];
+        const saved_items = self.items;
+        const saved_count = self.count;
+        std.mem.copyForwards(Record, self.items[index .. self.count - 1], self.items[index + 1 .. self.count]);
+        self.count -= 1;
+        self.save(ctx) catch |err| {
+            self.items = saved_items;
+            self.count = saved_count;
+            return err;
+        };
+        _ = ctx.mounts.revokeExternal(ctx.allocator, id);
+        ctx.allocator.free(removed.path);
+        return true;
+    }
+
     fn save(self: *const Catalog, ctx: *RuntimeContext) !void {
         const io = ctx.io orelse return error.IoNotReady;
         var out: std.ArrayList(u8) = .empty;

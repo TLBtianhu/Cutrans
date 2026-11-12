@@ -22,6 +22,7 @@ pub fn status(err: anyerror) i32 {
         error.ResourceNotReference, error.InvalidResourceState => api.Status.wrong_kind,
         error.ResourceContentMismatch, error.ResourceContentChanged, error.SourceContentMismatch => api.Status.content_mismatch,
         error.ResourceNotFound, error.FileNotFound => abi.Status.not_found,
+        error.ResourceLibraryFull, error.ExternalGrantTableFull => abi.Status.queue_full,
         error.OutOfMemory => abi.Status.out_of_memory,
         error.IoNotReady => abi.Status.not_ready,
         error.ManagedSourceForbidden, error.LinkedSourceUnsupported, error.ReadOnlySourceRequired => abi.Status.permission_denied,

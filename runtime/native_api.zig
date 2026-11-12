@@ -439,6 +439,8 @@ fn report(err: anyerror) i32 {
         error.InvalidHandle => abi.Status.invalid_handle,
         error.InvalidMode => abi.Status.abi_mismatch,
         error.LegacyExternalIdentityUnverified => abi.Status.legacy_identity_unverified,
+        // Prototype capacity is a distinct, user-actionable outcome.
+        error.ResourceLibraryFull, error.ExternalGrantTableFull => abi.Status.queue_full,
         else => abi.Status.failed,
     };
 }

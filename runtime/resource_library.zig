@@ -136,6 +136,63 @@ fn appendJsonString(out: *std.ArrayList(u8), allocator: std.mem.Allocator, compt
     try appendFmt(out, allocator, ",\"{s}\":{f}", .{ key, std.json.fmt(value, .{}) });
 }
 
+/// Live holders that make a catalog removal unsafe. Terminal archived jobs are
+/// deliberately not holders (user decision 2026-11-12): their explicit retry
+/// fails with ResourceNotFound instead of pinning the slot forever.
+pub const Holder = enum { document, history, export_job, station };
+
+fn documentNames(doc: *const @import("vne").documents.Document, uri: []const u8) bool {
+    const count = @min(doc.count, doc.nodes.len);
+    for (doc.nodes[0..count]) |*node| {
+        if (node.op == .image and std.mem.eql(u8, node.asset(), uri)) return true;
+    }
+    return false;
+}
+
+fn jobNames(job: *const @import("export_job.zig").Job, uri: []const u8) bool {
+    return documentNames(&job.document, uri) or std.mem.eql(u8, job.path(), uri);
+}
+
+/// Read-only scan without IO: the current document, every History entry
+/// (including the redo branch), unfinished exports and loaded Station objects.
+pub fn uriHolder(ctx: *const RuntimeContext, uri: []const u8) ?Holder {
+    if (documentNames(&ctx.document, uri)) return .document;
+    for (ctx.history.entries[0..ctx.history.count]) |*entry| {
+        switch (entry.*) {
+            .replace_document => |replaced| {
+                if (documentNames(&replaced.before, uri) or documentNames(&replaced.after, uri)) return .history;
+            },
+            else => {},
+        }
+    }
+    for (ctx.exports[0..ctx.export_count]) |*job| {
+        if (jobNames(job, uri)) return .export_job;
+    }
+    if (ctx.active_export) |*job| {
+        if (jobNames(job, uri)) return .export_job;
+    }
+    if (ctx.pending_finalize) |*record| {
+        if (jobNames(&record.job, uri)) return .export_job;
+    }
+    for (ctx.assets.items[0..ctx.assets.count]) |*asset| {
+        if (std.mem.eql(u8, asset.source.uri, uri)) return .station;
+    }
+    return null;
+}
+
+/// First live holder of `library://<id>`, also matching Station objects by
+/// their library identity rather than only by locator text.
+pub fn holderOf(ctx: *const RuntimeContext, id: u64) ?Holder {
+    var buffer: [32]u8 = undefined;
+    const uri = std.fmt.bufPrint(&buffer, "library://{d}", .{id}) catch return null;
+    if (uriHolder(ctx, uri)) |holder| return holder;
+    for (ctx.assets.items[0..ctx.assets.count]) |*asset| {
+        const identity = asset.source.identity orelse continue;
+        if (identity == .library and identity.library == id) return .station;
+    }
+    return null;
+}
+
 pub const Catalog = struct {
     items: [32]Resource = undefined,
     count: usize = 0,
@@ -483,6 +540,114 @@ pub const Catalog = struct {
             return err;
         };
         mutation.publish(self, ctx);
+    }
+
+    pub const Removal = struct {
+        /// Persistent external grant released together with its last reference.
+        released_grant: ?u64 = null,
+    };
+
+    /// Remove one catalog node. Folders must be empty. Resources must have no
+    /// live holder and no unsubmitted draft. Retained versions, owned content
+    /// and work bodies stay on disk as unreferenced files; identities are never
+    /// reused. Work receipts naming the resource are dropped so the catalog
+    /// still restores; the client high-water marks keep old sequences refused.
+    pub fn remove(self: *Catalog, ctx: *RuntimeContext, id: u64) !Removal {
+        if (self.getFolder(id) != null) {
+            try self.removeFolder(ctx, id);
+            return .{};
+        }
+        var index: usize = 0;
+        while (index < self.count and self.items[index].id != id) : (index += 1) {}
+        if (index == self.count) return error.ResourceNotFound;
+        const removed = self.items[index];
+        if (removed.draft_revision != 0) return error.ResourceHasDraft;
+        if (holderOf(ctx, id) != null) return error.ResourceInUse;
+        const mutation = try self.prepareMutation(ctx, true);
+        const saved_items = self.items;
+        const saved_count = self.count;
+        const saved_receipts = self.work_receipts;
+        const saved_receipt_count = self.work_receipt_count;
+        const saved_receipt_next = self.work_receipt_next;
+        std.mem.copyForwards(Resource, self.items[index .. self.count - 1], self.items[index + 1 .. self.count]);
+        self.count -= 1;
+        self.dropReceipts(id);
+        self.save(ctx) catch |err| {
+            self.items = saved_items;
+            self.count = saved_count;
+            self.work_receipts = saved_receipts;
+            self.work_receipt_count = saved_receipt_count;
+            self.work_receipt_next = saved_receipt_next;
+            return err;
+        };
+        mutation.publish(self, ctx);
+        var result: Removal = .{};
+        if (removed.kind == .reference) {
+            // The catalog commit already succeeded. A failed release only
+            // leaves an unused grant, like a failed publication does.
+            result.released_grant = self.releaseSourceIfUnused(ctx, removed.source_uri) catch |err| blk: {
+                std.debug.print("CUTRANS_SOURCE_RELEASE_DEFERRED source={s} error={s}\n", .{ removed.source_uri, @errorName(err) });
+                break :blk null;
+            };
+        }
+        ctx.allocator.free(removed.label);
+        ctx.allocator.free(removed.source_uri);
+        return result;
+    }
+
+    fn removeFolder(self: *Catalog, ctx: *RuntimeContext, id: u64) !void {
+        for (self.folders[0..self.folder_count]) |folder| {
+            if (folder.parent_id == id) return error.ResourceFolderNotEmpty;
+        }
+        for (self.items[0..self.count]) |item| {
+            if (item.parent_id == id) return error.ResourceFolderNotEmpty;
+        }
+        var index: usize = 0;
+        while (index < self.folder_count and self.folders[index].id != id) : (index += 1) {}
+        if (index == self.folder_count) return error.ResourceNotFound;
+        const mutation = try self.prepareMutation(ctx, false);
+        const removed = self.folders[index];
+        const saved_folders = self.folders;
+        const saved_count = self.folder_count;
+        std.mem.copyForwards(Folder, self.folders[index .. self.folder_count - 1], self.folders[index + 1 .. self.folder_count]);
+        self.folder_count -= 1;
+        self.save(ctx) catch |err| {
+            self.folders = saved_folders;
+            self.folder_count = saved_count;
+            return err;
+        };
+        mutation.publish(self, ctx);
+        ctx.allocator.free(removed.label);
+    }
+
+    /// Compact the receipt ring in chronological order without `id`.
+    fn dropReceipts(self: *Catalog, id: u64) void {
+        var kept: [@import("vne").resource_api.receipt_capacity]WorkReceipt = undefined;
+        var kept_count: usize = 0;
+        const start = if (self.work_receipt_count == self.work_receipts.len) self.work_receipt_next else 0;
+        for (0..self.work_receipt_count) |offset| {
+            const receipt = self.work_receipts[(start + offset) % self.work_receipts.len];
+            if (receipt.resource_id == id) continue;
+            kept[kept_count] = receipt;
+            kept_count += 1;
+        }
+        if (kept_count == self.work_receipt_count) return;
+        @memcpy(self.work_receipts[0..kept_count], kept[0..kept_count]);
+        self.work_receipt_count = kept_count;
+        self.work_receipt_next = 0;
+    }
+
+    /// Detached/owned entries keep old external provenance without needing the
+    /// grant (see restore), so only reference entries and live holders pin it.
+    fn releaseSourceIfUnused(self: *const Catalog, ctx: *RuntimeContext, source_uri: []const u8) !?u64 {
+        const uri = @import("vne").uri.parse(source_uri) catch return null;
+        if (uri.root != .external) return null;
+        const grant = std.fmt.parseInt(u64, uri.body, 10) catch return null;
+        for (self.items[0..self.count]) |item| {
+            if (item.kind == .reference and std.mem.eql(u8, item.source_uri, source_uri)) return null;
+        }
+        if (uriHolder(ctx, source_uri) != null) return null;
+        return if (try ctx.external_sources.forget(ctx, grant)) grant else null;
     }
 
     pub fn importExternal(self: *Catalog, ctx: *RuntimeContext, path: []const u8) !u64 {
@@ -1033,6 +1198,7 @@ pub fn dispatch(c: @import("vne").command.Command, opaque_ptr: *anyopaque) @impo
         const id = ctx.library.createFolder(ctx, parsed.id, parsed.label) catch |err| return switch (err) {
             error.InvalidResourceLabel => .failure(.invalid_arguments),
             error.InvalidResourceHierarchy => .failure(.invalid_state),
+            error.ResourceLibraryFull => .failure(.queue_full),
             else => .failure(.failed),
         };
         std.debug.print("CUTRANS_LIBRARY_FOLDER folder={d} parent={d}\n", .{ id, parsed.id });
@@ -1085,8 +1251,24 @@ pub fn dispatch(c: @import("vne").command.Command, opaque_ptr: *anyopaque) @impo
         const label = std.mem.trim(u8, value[split + 1 ..], " \t");
         if (label.len == 0) return .failure(.invalid_arguments);
         const asset = ctx.assets.get(id) catch return .failure(.invalid_state);
-        const library_id = ctx.library.create(ctx, label, asset.bytes) catch return .failure(.failed);
+        const library_id = ctx.library.create(ctx, label, asset.bytes) catch |err| return switch (err) {
+            error.ResourceLibraryFull => .failure(.queue_full),
+            else => .failure(.failed),
+        };
         std.debug.print("CUTRANS_LIBRARY_CREATE library={d} source_asset={d}\n", .{ library_id, id });
+        return .success;
+    }
+    if (std.mem.eql(u8, c.name, "library.remove")) {
+        const id = onlyId(c.arg) catch return .failure(.invalid_arguments);
+        const removal = ctx.library.remove(ctx, id) catch |err| {
+            const holder = holderOf(ctx, id);
+            std.debug.print("CUTRANS_LIBRARY_REMOVE_REFUSED id={d} error={s} holder={s}\n", .{ id, @errorName(err), if (holder) |value| @tagName(value) else "none" });
+            return switch (err) {
+                error.ResourceNotFound, error.ResourceInUse, error.ResourceHasDraft, error.ResourceFolderNotEmpty => .failure(.invalid_state),
+                else => .failure(.failed),
+            };
+        };
+        std.debug.print("CUTRANS_LIBRARY_REMOVE id={d} released_grant={d}\n", .{ id, removal.released_grant orelse 0 });
         return .success;
     }
     if (std.mem.eql(u8, c.name, "library.list")) {
@@ -2121,4 +2303,196 @@ test "generic catalog publication failure preserves resources and retries the re
     try std.testing.expectEqualSlices(u8, before, restored);
     try std.testing.expectEqual(next_id, try ctx.library.registerFile(&ctx, other));
     try std.testing.expectEqual(source_count, ctx.external_sources.count);
+}
+
+test "removal frees a catalog slot only when nothing holds the resource and never reuses its identity" {
+    var tc = try LibraryCase.init();
+    defer tc.deinit();
+    var ctx: RuntimeContext = undefined;
+    try tc.open(&ctx);
+    defer ctx.deinit();
+    const allocator = std.testing.allocator;
+    const png_bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, tc.source, allocator, .limited(1024 * 1024));
+    defer allocator.free(png_bytes);
+    const victim = try ctx.library.create(&ctx, "victim.png", png_bytes);
+    const digest = ctx.library.get(victim).?.content_hash;
+    while (ctx.library.count < ctx.library.items.len) {
+        var name_buffer: [32]u8 = undefined;
+        const label = try std.fmt.bufPrint(&name_buffer, "padding-{d}.bin", .{ctx.library.count});
+        _ = try ctx.library.create(&ctx, label, "padding");
+    }
+    try std.testing.expectError(error.ResourceLibraryFull, ctx.library.create(&ctx, "overflow.bin", "overflow"));
+    var uri_buffer: [32]u8 = undefined;
+    const uri = try std.fmt.bufPrint(&uri_buffer, "library://{d}", .{victim});
+
+    // Every live holder refuses removal before any catalog IO.
+    const revision = ctx.library.revision;
+    try ctx.document.setImageSource(uri, digest, 1, 1);
+    const held = ctx.document;
+    try std.testing.expectEqual(Holder.document, holderOf(&ctx, victim).?);
+    try std.testing.expectError(error.ResourceInUse, ctx.library.remove(&ctx, victim));
+    ctx.document = @import("vne").documents.Document.initDefault();
+    try ctx.history.record(.{ .replace_document = .{ .before = held, .after = ctx.document } });
+    try std.testing.expectEqual(Holder.history, holderOf(&ctx, victim).?);
+    try std.testing.expectError(error.ResourceInUse, ctx.library.remove(&ctx, victim));
+    ctx.history.reset();
+    ctx.exports[0] = try @import("export_job.zig").Job.init(1, held, null);
+    ctx.export_count = 1;
+    try std.testing.expectEqual(Holder.export_job, holderOf(&ctx, victim).?);
+    try std.testing.expectError(error.ResourceInUse, ctx.library.remove(&ctx, victim));
+    ctx.export_count = 0;
+    const handle = try ctx.assets.open(&ctx, uri);
+    try std.testing.expectEqual(Holder.station, holderOf(&ctx, victim).?);
+    try std.testing.expectError(error.ResourceInUse, ctx.library.remove(&ctx, victim));
+    try ctx.assets.release(handle);
+    try std.testing.expectEqual(@as(?Holder, null), holderOf(&ctx, victim));
+    try std.testing.expectEqual(revision, ctx.library.revision);
+    try std.testing.expectEqual(@as(usize, ctx.library.items.len), ctx.library.count);
+
+    const removal = try ctx.library.remove(&ctx, victim);
+    try std.testing.expectEqual(@as(?u64, null), removal.released_grant);
+    try std.testing.expect(ctx.library.get(victim) == null);
+    try std.testing.expectEqual(revision + 1, ctx.library.revision);
+    try std.testing.expectError(error.ResourceNotFound, ctx.library.remove(&ctx, victim));
+    // The freed slot is usable again, but the identity is never reissued.
+    const next_id = ctx.library.next_id;
+    const replacement = try ctx.library.create(&ctx, "after-removal.bin", "after");
+    try std.testing.expectEqual(next_id, replacement);
+    try std.testing.expect(replacement != victim);
+    // Retained bytes stay on disk as unreferenced files.
+    var data_dir = try std.Io.Dir.openDirAbsolute(std.testing.io, tc.data, .{});
+    defer data_dir.close(std.testing.io);
+    const kept = try versions.read(data_dir, std.testing.io, allocator, victim, digest);
+    allocator.free(kept);
+
+    var restored: RuntimeContext = undefined;
+    try tc.open(&restored);
+    defer restored.deinit();
+    try restored.library.restore(&restored);
+    try std.testing.expect(restored.library.get(victim) == null);
+    try std.testing.expectEqual(ctx.library.count, restored.library.count);
+    try std.testing.expectEqual(ctx.library.next_id, restored.library.next_id);
+}
+
+test "removing a work resource drops its receipts so the catalog still restores" {
+    var tc = try LibraryCase.init();
+    defer tc.deinit();
+    var ctx: RuntimeContext = undefined;
+    try tc.open(&ctx);
+    defer ctx.deinit();
+    const kept = try ctx.library.createWork(&ctx, "kept.txt", "kept body", workEnvelope(1, .create));
+    const work = try ctx.library.createWork(&ctx, "note.txt", "base body", workEnvelope(2, .create));
+    const draft = try ctx.library.saveWorkDraft(&ctx, work.resource_id, 1, 0, "draft", workEnvelope(3, .save_draft));
+    try std.testing.expectError(error.ResourceHasDraft, ctx.library.remove(&ctx, work.resource_id));
+    _ = try ctx.library.discardWorkDraft(&ctx, work.resource_id, draft.draft_revision, workEnvelope(4, .discard));
+    _ = try ctx.library.remove(&ctx, work.resource_id);
+    try std.testing.expectEqual(@as(usize, 1), ctx.library.work_receipt_count);
+    for (ctx.library.work_receipts[0..ctx.library.work_receipt_count]) |receipt| {
+        try std.testing.expect(receipt.resource_id != work.resource_id);
+    }
+    // The dropped outcomes are gone, but their sequences can never run again.
+    try std.testing.expectEqual(@as(u64, 4), ctx.library.clientHigh(7, 9).?);
+    // A receipt naming a missing resource used to make restore refuse the
+    // whole catalog; removal must never leave the library unbootable.
+    var restored: RuntimeContext = undefined;
+    try tc.open(&restored);
+    defer restored.deinit();
+    try restored.library.restore(&restored);
+    try std.testing.expect(restored.library.get(work.resource_id) == null);
+    try std.testing.expect(restored.library.get(kept.resource_id) != null);
+    try std.testing.expectEqual(@as(u64, 4), restored.library.clientHigh(7, 9).?);
+}
+
+test "only empty folders are removed and the removal persists" {
+    var tc = try LibraryCase.init();
+    defer tc.deinit();
+    var ctx: RuntimeContext = undefined;
+    try tc.open(&ctx);
+    defer ctx.deinit();
+    const outer = try ctx.library.createFolder(&ctx, 0, "outer");
+    const inner = try ctx.library.createFolder(&ctx, outer, "inner");
+    const item = try ctx.library.create(&ctx, "note.bin", "bytes");
+    try ctx.library.move(&ctx, item, inner);
+    const revision = ctx.library.revision;
+    try std.testing.expectError(error.ResourceFolderNotEmpty, ctx.library.remove(&ctx, outer));
+    try std.testing.expectError(error.ResourceFolderNotEmpty, ctx.library.remove(&ctx, inner));
+    try std.testing.expectEqual(revision, ctx.library.revision);
+    _ = try ctx.library.remove(&ctx, item);
+    _ = try ctx.library.remove(&ctx, inner);
+    _ = try ctx.library.remove(&ctx, outer);
+    try std.testing.expectEqual(@as(usize, 0), ctx.library.folder_count);
+    try std.testing.expectEqual(@as(usize, 0), ctx.library.count);
+    try std.testing.expectError(error.ResourceNotFound, ctx.library.remove(&ctx, outer));
+    try std.testing.expectError(error.ResourceNotFound, ctx.library.remove(&ctx, 0));
+    var restored: RuntimeContext = undefined;
+    try tc.open(&restored);
+    defer restored.deinit();
+    try restored.library.restore(&restored);
+    try std.testing.expectEqual(@as(usize, 0), restored.library.folder_count);
+    try std.testing.expectEqual(ctx.library.next_id, restored.library.next_id);
+}
+
+test "the last reference releases its persistent grant and a full grant table recovers" {
+    var tc = try LibraryCase.init();
+    defer tc.deinit();
+    var ctx: RuntimeContext = undefined;
+    try tc.open(&ctx);
+    defer ctx.deinit();
+    const allocator = std.testing.allocator;
+    var paths: [8][]u8 = undefined;
+    var made: usize = 0;
+    defer {
+        for (paths[0..made]) |path| allocator.free(path);
+    }
+    var ids: [8]u64 = undefined;
+    while (made < paths.len) {
+        var name_buffer: [32]u8 = undefined;
+        const name = try std.fmt.bufPrint(&name_buffer, "source-{d}.png", .{made});
+        paths[made] = try tc.png(name, @intCast(made));
+        made += 1;
+        ids[made - 1] = try ctx.library.importExternal(&ctx, paths[made - 1]);
+    }
+    const extra = try tc.png("extra.png", 200);
+    defer allocator.free(extra);
+    try std.testing.expectError(error.ExternalGrantTableFull, ctx.library.importExternal(&ctx, extra));
+    try std.testing.expectEqual(@as(usize, 8), ctx.external_sources.count);
+
+    const first_uri = try allocator.dupe(u8, ctx.library.get(ids[0]).?.source_uri);
+    defer allocator.free(first_uri);
+    const first_grant = try std.fmt.parseInt(u64, first_uri["external://".len..], 10);
+    const second_uri = try allocator.dupe(u8, ctx.library.get(ids[1]).?.source_uri);
+    defer allocator.free(second_uri);
+    const second_grant = try std.fmt.parseInt(u64, second_uri["external://".len..], 10);
+
+    // A document naming the grant directly keeps it even after the library
+    // entry is gone; the catalog entry itself is still removable.
+    try ctx.document.setImageSource(first_uri, ctx.library.get(ids[0]).?.content_hash, 1, 1);
+    try std.testing.expectEqual(@as(?u64, null), (try ctx.library.remove(&ctx, ids[0])).released_grant);
+    try std.testing.expectEqual(@as(usize, 8), ctx.external_sources.count);
+    ctx.document = @import("vne").documents.Document.initDefault();
+
+    try std.testing.expectEqual(@as(?u64, second_grant), (try ctx.library.remove(&ctx, ids[1])).released_grant);
+    try std.testing.expectEqual(@as(usize, 7), ctx.external_sources.count);
+    try std.testing.expectError(error.ExternalGrantNotFound, ctx.mounts.resolveAlloc(allocator, try @import("vne").uri.parse(second_uri)));
+    // The released slot is reusable; grant identities stay monotonic.
+    const extra_id = try ctx.library.importExternal(&ctx, extra);
+    const extra_uri = ctx.library.get(extra_id).?.source_uri;
+    try std.testing.expect(try std.fmt.parseInt(u64, extra_uri["external://".len..], 10) > second_grant);
+
+    // Re-registering the orphaned file reuses its grant; removing that last
+    // reference then releases it.
+    const again = try ctx.library.importExternal(&ctx, paths[0]);
+    try std.testing.expect(again != ids[0]);
+    try std.testing.expectEqualStrings(first_uri, ctx.library.get(again).?.source_uri);
+    try std.testing.expectEqual(@as(?u64, first_grant), (try ctx.library.remove(&ctx, again)).released_grant);
+    try std.testing.expectEqual(@as(usize, 7), ctx.external_sources.count);
+
+    var restored: RuntimeContext = undefined;
+    try tc.open(&restored);
+    defer restored.deinit();
+    try restored.external_sources.restore(&restored);
+    try restored.library.restore(&restored);
+    try std.testing.expectEqual(ctx.external_sources.count, restored.external_sources.count);
+    try std.testing.expectEqual(ctx.library.count, restored.library.count);
+    try std.testing.expectError(error.ExternalGrantNotFound, restored.mounts.resolveAlloc(allocator, try @import("vne").uri.parse(first_uri)));
 }

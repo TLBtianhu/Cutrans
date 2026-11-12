@@ -69,7 +69,7 @@ owned及已采用版本保存在`library/versions/<id>/<sha>.bin`，旧`library/
 - 未正常停止的实例下次启动会标记 `last_shutdown_abnormal=1`，并继续增加 `boot_id`；正常停止后该标记清零。`restart` 必须先正常停止再启动。
 - `verify-host` 覆盖重复启动、第二 Host 和旧入口拒绝、幂等停止、保存失败重试、异常终止恢复及暂存目录纯净。人工 installed 布局与真实系统安装的验收须分别记录。
 
-`cutrans.exe --role=shell` 经同一 `runAttached` 屏障运行链接进统一入口的 NanoUI 桌面；`--role=library` 同理进入独立资源库。旧 `cutrans_vm.exe attach` 和独立 `cutrans_shell.exe` 保留为回退路径。ShellApi 经版本化 RPC 转发到 Host，关闭 Shell 不会销毁 Runtime，重开可恢复文档、目录和 Station。`shell_handshake` 只做身份与选择预检；前端正常返回并再次通过清单校验后，`shell_commit` 才原子更新选择锁。启动失败或异常终止不会提交 Shell，外部文档仍由 Host 授权打开。`status` 同时返回真实 `present_count`，`verify-attach` 据此验证普通启动、素材和播放，而不依赖同进程日志。默认 `cutrans_vm.exe` 与 `desktop` 都会启动或复用 Host，再显式附着桌面；不再创建第二个进程内 Runtime。低级附着使用 `attach` 或 `cutrans_shell.exe`，`library` 仅作为 NanoUI 的开发诊断入口。无头诊断与回放仍使用独立 Runtime，并拒绝成为 Host 的第二写者。Host已有独立导出作业驱动；统一 NanoUI 控制台和任务分页已接入，自动断线重连尚未实现。
+`cutrans.exe --role=shell` 经同一 `runAttached` 屏障运行链接进统一入口的 NanoUI 桌面；`--role=library` 同理进入独立资源库。旧 `cutrans_vm.exe attach` 和独立 `cutrans_shell.exe` 保留为回退路径。ShellApi 经版本化 RPC 转发到 Host，关闭 Shell 不会销毁 Runtime，重开可恢复文档、目录和 Station。`shell_handshake` 只做身份与选择预检；前端正常返回并再次通过清单校验后，`shell_commit` 才原子更新选择锁。启动失败或异常终止不会提交 Shell，外部文档仍由 Host 授权打开。`status` 同时返回真实 `present_count`，`verify-attach` 据此验证普通启动、素材和播放，而不依赖同进程日志。默认 `cutrans_vm.exe` 与 `desktop` 都会启动或复用 Host，再显式附着桌面；不再创建第二个进程内 Runtime。低级附着使用 `attach` 或 `cutrans_shell.exe`，`library` 仅作为 NanoUI 的开发诊断入口。无头诊断与回放仍使用独立 Runtime，并拒绝成为 Host 的第二写者。Host已有独立导出作业驱动；统一 NanoUI 控制台和任务分页已接入。Host 重连 v1 已于 2026-11-11 落地：镜像读取失败后重新 verify Host 并重试一次，pending 请求保留、不自动重放，普通命令不自动重试，见[Host 重连 v1](../memory/2026-11-11-host-reconnect-v1.md)。
 
 ## 帧与播放
 
@@ -94,7 +94,7 @@ FrameSink 将预览 `offer`、GPU `submitted`、内容 `underflow` 和输出 `un
 
 `ProcessPort` 的 Job Object 是进程树资源管理边界，**不是安全沙箱**；`vm-pack.json` 也只是兼容性与依赖清单，**不是签名系统、安装器或回滚系统**。Runtime 与 Bootstrap 同进程运行，同样不构成不可信代码隔离。
 
-当前Host／Shell ABI10、Document API v1、Resource API v4；不稳定期明确拒绝旧接口。Runtime构造和命令执行使用自有栈，不要求外部调用方提供内部Zig大栈；工作线程、owner与渲染worker按职责分离，不能由创建线程的历史记录推断当前无持续驱动。
+当前 Host／Shell ABI、Document API 与 Resource API 版本以 `vne/abi.zig`、`vne/resource_api.zig` 的 `version` 常量和[现役状态](../memory/current.md)为准，本文不复制会漂移的版本号；不稳定期明确拒绝旧接口。Runtime构造和命令执行使用自有栈，不要求外部调用方提供内部Zig大栈；工作线程、owner与渲染worker按职责分离，不能由创建线程的历史记录推断当前无持续驱动。
 
 `session/runtime.lock` 记录 Runtime 与 Shell 的 id、version、abi 和清单 SHA-256，不记录宿主路径。默认包与锁不一致会拒绝启动；显式 `--runtime=<绝对目录>` 或 `--shell-dir=<绝对目录>` 才允许迁移或回滚，验证后原子更新选择。同 payload 重装和默认卸载都保留该锁。
 
@@ -117,4 +117,4 @@ FrameSink 将预览 `offer`、GPU `submitted`、内容 `underflow` 和输出 `un
 
 环境内安全退出已实现：`prepare_stop` 先停止新业务，`cancel_jobs` 复用持久协作取消，`resume_work` 可撤销尚未完成的退出，最终按既有 `stop` 暂停驱动、冲刷结果并保存。NanoUI 在 Host 正常停止前不关闭，失败可重试，草稿不自动提交；这不等于强制抢占或 OS 沙箱。详见[安全退出实施记录](../memory/2026-11-09-safe-exit.md)。
 
-资源内嵌和最终单文件发行仍未完成。具体启动屏障见[环境先验记录](../memory/2026-11-09-environment-session.md)。
+portable payload／context 已内嵌进 `cutrans.exe` 并有原型验证（见[内嵌 payload](../memory/2026-11-10-embedded-payload.md)）；受管发布、真实安装与最终单文件发行仍未完成。具体启动屏障见[环境先验记录](../memory/2026-11-09-environment-session.md)。

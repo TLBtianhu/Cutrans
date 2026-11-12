@@ -162,6 +162,7 @@ pub const Model = struct {
             abi.Status.out_of_memory => "OutOfMemory",
             abi.Status.not_ready => "HostNotReady",
             abi.Status.not_found => "ResourceNotFound",
+            abi.Status.queue_full => "ResourceCapacityReached",
             else => "WorkRequestRejected",
         };
     }

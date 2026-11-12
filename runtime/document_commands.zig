@@ -759,6 +759,7 @@ pub fn register(ctx: *RuntimeContext) void {
     ctx.command.register("library.folder.create", @import("resource_library.zig").dispatch);
     ctx.command.register("library.rename", @import("resource_library.zig").dispatch);
     ctx.command.register("library.move", @import("resource_library.zig").dispatch);
+    ctx.command.register("library.remove", @import("resource_library.zig").dispatch);
     ctx.command.register("library.list", @import("resource_library.zig").dispatch);
 }
 

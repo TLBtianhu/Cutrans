@@ -24,6 +24,7 @@ pub fn registerExternal(allocator: std.mem.Allocator, api: *const abi.ShellApi, 
             .unknown => return error.ExternalRegistrationUnknown,
         },
     };
+    if (settlement.outcome.status == abi.Status.queue_full) return error.ResourceCapacityReached;
     if (settlement.outcome.status != abi.Status.ok or settlement.outcome.resource_id == 0) {
         return error.ExternalRegistrationFailed;
     }

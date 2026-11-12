@@ -6,7 +6,7 @@
 
 - Cutrans 是声明式 VM 与多域创作工作台的早期原型；当前实现最小单文档静态图像闭环。
 - `.cut v3` 支持 testsrc/gain/invert/over/image/resize，规范化文本、稳定引用与内容指纹。
-- A1已加入节点发号持久高水位及文档／History候选提交；失败不发布半编辑，撤销／恢复／新分支不复用节点ID。A2的文档API v1提供Runtime epoch＋revision、文档操作前置版本、请求去重与一致文档快照；当前Host／Shell为ABI10，独立资源API已在C2c2显式升v2，并在工作正文切片升v3，在本机文件切片升v4；保留旧定位／采用／登记语义，新增工作快照／提交与一层只读浏览。Shell分账已知Outcome和投影失败，结果未知时仅重试原请求。工作成功回执已可跨恢复，旧文档／普通资源回执仍不跨Runtime重启保存；save／旧资源命令／原始语义输入尚未全部转为受管理请求。
+- A1已加入节点发号持久高水位及文档／History候选提交；失败不发布半编辑，撤销／恢复／新分支不复用节点ID。A2的文档API v1提供Runtime epoch＋revision、文档操作前置版本、请求去重与一致文档快照；当前Host／Shell为ABI11（2026-11-10 Preview ABI 升级；以 `vne/abi.zig` 的 `version` 为准），独立资源API已在C2c2显式升v2，并在工作正文切片升v3，在本机文件切片升v4；保留旧定位／采用／登记语义，新增工作快照／提交与一层只读浏览。Shell分账已知Outcome和投影失败，结果未知时仅重试原请求。工作成功回执已可跨恢复，旧文档／普通资源回执仍不跨Runtime重启保存；save／旧资源命令／原始语义输入尚未全部转为受管理请求。
 - PNG 导入、预览、合成与导出可经同一命令入口完成；History、Task、Catalog 和授权有恢复记录。
 - 默认公开入口启动或复用独立 Host，再附着 desktop；关闭 Shell 与停止 VM 分开。
 - B1已接通持久导出声明、有界FIFO和Host无Shell自主推进；输出先prepare／sync／记录再原子提交，终态落盘失败只补日志。可分页查询归档与错误；重启保留声明并标interrupted，不自动重做可能已经写出的输出。
@@ -19,6 +19,9 @@
 - 工作正文切片将Resource API升v3：owned资源具有独立工作revision和草稿token，自动保存草稿不推进工作头，显式提交才发布新正文。正文与草稿按revision完整发布，Catalog v4同次提交资源头、草稿元数据、成功回执与客户端高水位；最近64条回执为环形覆盖，不再有终身64次上限，跨恢复重放不重复创建或提交。自动保存按空闲400ms防抖，Ctrl+S／关闭强制落盘。NanoUI支持创建、编辑和关闭保护，Document／History／排队Job继续固定原hash。失败回执、未决Shell队列、目录和共享异步求值仍按既有边界处理。
 - 本机文件切片将Resource API升v4：新增RPC31一层只读浏览与RPC32临时成员读取。浏览只保留路径／游标／条目投影，不隐式创建ResourceId、授权、留存或Station；目录最多4096项、每页128项。NanoUI本机文件页支持导航、刷新、文本／PNG预览和显式收录，登记与预览／消费分账，插入文档仍走既有资源库动作。
 - Task活跃队列8项（含执行中）、近期缓存40项、分页32项，终态逐Job归档且默认保留，已移除终身32项上限；文档8节点、库32资源仍是原型限额。B2已将导出decode／求值／编码移至会话锁外的单worker，支持持久协作取消与新ID／attempt重试；原输入版本不随当前编辑变化。
+- 2026-11-12 评审确认的两项结构性边界（已核码，见[评审交接](2026-11-12-review-handoff.md)第三节）：
+  - **文档模型是格式死路，不只是容量问题**：`vne/documents.zig` 为 `nodes: [8]Node`、单一 `output_id`、fps 写在文档内、没有时间维度；`Op` 只有 testsrc／gain／invert／over／image／resize。有合成运算，但没有可复用、有作用域的合成单元（宪法“一 comp 一流”）。History 每条按值保存完整 before／after Document（`runtime/history_journal.zig`），放开 `[8]` 需要改快照所有权，不是改数组长度；v3 强制单一 `output=` 进一步固化单输出。后续以 v4 格式 ADR 处理。
+  - **“一切皆插件”尚无实现**：`runtime/capabilities.zig` 是手写静态声明表，只与 adapter_ids 对账，是校验表而不是装载器；没有按依赖 DAG 装载插件的机制，运行时唯一可装载物是整个 Runtime DLL Pack。`Op` 含 `image` 而声明表无 `node.image`，是否有意未确认。
 - 真实视频音频、通用不可信插件、强制抢占式取消、Runtime 下载/自动更新、多版本安装和跨 OS 实机仍未完成。
 
 ## 安装与 UI
@@ -138,12 +141,18 @@ C2c2最终179/179构建步骤、新实际DLL／Host14组及同产物18项headles
 
 2026-11-12 未决请求停止等待（Host/Shell 两段闭环）：`vm_client` 新增 `hasPending`/`abandonPending`，编辑器在结果未确认时显示警告和“停止等待未确认修改”。停止等待只结束客户端等待，不重放也不回滚；刷新后的文档镜像显示 VM 真实状态，后续编辑用刷新后的 expected stamp 防止旧请求晚到造成静默覆盖。`data/shell/pending-unknown.txt` 在 Shell 重启后继续提示“可能已执行”，确认后清除且标记不携带可重放请求。新增 `verify-unknown-result`：真实 Host 提交后丢回复、Shell 保留 pending、重启后 `wrong_epoch` 清空且不重复提交、新 identity 显式编辑成功；并验证 pending 时 Shell 退出后下一个 Shell 打印 `CUTRANS_UNKNOWN_HISTORICAL` 并完成普通桌面场景。单元测试、`test-nanoui-desktop` 与 `verify-payload` 通过；按钮点击、取消/回滚协议、真实 GUI/IME 与安装验收仍未覆盖。详见 [停止等待入口](2026-11-12-pending-wait-stop.md)。
 
-2026-11-12 保存原子性与 v3 显式输出：`.cut` 落盘改用 `vne/atomic_write.zig` 的临时文件＋flush＋原子替换（此前是全仓唯一一处截断式持久写，同文件已存在正确原语）；History journal 记录并还原 `dirty`/`legacy`，恢复不再无条件声称已保存；`doc.save` 改为写前日志(pending)→原子目标→确认标记，确认失败只降级状态栏。canonical v3 要求显式 `output=`，行对齐截断不再被接受（v1/v2 隐式输出迁移不变）。新增 `verify-write-order`（4 项真机断言）与 `vne/documents.zig` 测试根。同片暴露三项未修复问题：vne 模块根测试从未执行、两个既有锁测试因 `SHARING_VIOLATION` panic 稳定失败、panic 型失败不改变 `build test` 退出码。`build test`、`verify-write-order`、`verify-architecture`、`verify-repository` 退出 0；真实 GUI/IME、安装与掉电注入未验收。详见 [保存原子性](2026-11-12-atomic-save-and-v3-output.md)。
+2026-11-12 保存原子性与 v3 显式输出：`.cut` 落盘改用 `vne/atomic_write.zig` 的临时文件＋flush＋原子替换（此前是全仓唯一一处截断式持久写，同文件已存在正确原语）；History journal 记录并还原 `dirty`/`legacy`，恢复不再无条件声称已保存；`doc.save` 改为写前日志(pending)→原子目标→确认标记，确认失败只降级状态栏。canonical v3 要求显式 `output=`，行对齐截断不再被接受（v1/v2 隐式输出迁移不变）。新增 `verify-write-order`（4 项真机断言）与 `vne/documents.zig` 测试根。同片暴露三项未修复问题：vne 模块根测试从未执行、两个既有锁测试因 `SHARING_VIOLATION` panic 稳定失败、panic 型失败不改变 `build test` 退出码。（**锁测试归因已被下一条更正**：两个锁测试本身通过，失败只出现在构建运行器路径，运行器型失败不改变退出码；见[评审交接](2026-11-12-review-handoff.md)。）`build test`、`verify-write-order`、`verify-architecture`、`verify-repository` 退出 0；真实 GUI/IME、安装与掉电注入未验收。详见 [保存原子性](2026-11-12-atomic-save-and-v3-output.md)。
 
 2026-11-12 工作正文发布顺序与草稿基线：`library/work|drafts/<id>/` 的正文改名为「revision/token + 内容哈希」，旧 `<revision>.bin` 只读兼容；Catalog 提交失败留下的未引用正文不再与同一 revision 的重试冲突。`save_draft` 的 `base_revision` 必须等于当前工作头，落后客户端的草稿保存直接返回过期版本，不再写入一份提交时必然被拒的草稿。`verify-work-documents`（`CUTRANS_WORK_DOCUMENTS_VERIFY_OK`）、`verify-architecture`、`verify-repository` 退出 0；`resource_library` 测试二进制单独运行 143/143 通过。同片修正上一片对两个锁测试的错误归因：测试本身通过，失败只在构建运行器路径（HEAD 同样复现）。GUI 客户端缺少"落后后重读快照"的重同步，真实操作中会停在拒绝状态。详见 [发布顺序](2026-11-12-work-publication-order.md)。
 
 ## 2026-11-12 进度快照
 
+- ~~**进行中（未编译、未验证、未提交）**：接续顺序第 1 步“容量与回收（窄版）”的代码已写入工作区……在其“验证”一节补齐前，不得把 `library.remove`、授权释放或容量错误当作现役能力。~~（被下一条取代）
+- **容量与回收（窄版）已在本机验证（2026-11-12）**：代码一次编译通过、零修改。`build test` 第三次运行退出 0，前两次因 Zig loader 间歇异常失败；三个被标失败的测试二进制单独运行分别为 112/112、178/178、114/114，四个新测试逐条 OK。`verify-assets` 新增了真实 DLL 上的 `library.remove` 拒绝、空文件夹删除、ID 不复用和重启持久化断言并通过；`verify-architecture`、`verify-work-documents`、`verify-local-sources`、`verify-repository` 也都退出 0。`library.remove` 只验证了 DLL 命令入口和单元测试，Host RPC、Shell、CLI 端到端以及 GUI 删除按钮未覆盖。详见[容量与回收（窄版）](2026-11-12-capacity-reclaim.md)“验证”一节。
+- **验证中新发现的两个既有问题（均不是本片引入）**：
+  - `verify-resource-registration` 在 HEAD `22cc8907` 上就失败：`native_boundaries` 的四个受管路径中至少一个 `register_file` 探针返回成功而不是 `DENIED`（`tools/verify_resource_registration.py:335`）。已通过 stash 本片后重跑确认与本片无关。该验证上一次运行是 2026-11-08；具体是哪个路径被接受、边界何时改变都没有定位，未修。这意味着“受管根拒绝登记”这一已记录的边界当前**不能视为成立**，需要排期。
+  - `verify-assets` 自 2026-11-07 起从未运行，它的 catalog 格式断言（`/2`）对 Catalog v4 早已失效，本片已修正。说明多个 `verify_*` 脚本可能长期没跑；“曾经通过”不代表当前通过。
+- Git（2026-11-12 评审交接后复核）：`master` 与 `origin/master` 同为 `22cc8907`，审计检查点记为未推送的 4 个提交已推送；评审交接页及本次记忆刷新随后单独提交。
 - 当前 `master` 已包含本会话三个片：`0bc7ba51`（保存原子性与 v3 显式输出）、`fb124808`（其后的记忆更新）、`714ebafd`（工作正文发布顺序与草稿基线）；其后为记忆检查点提交，工作区干净。审计结论与接续顺序见[审计结论与进度检查点](2026-11-12-audit-checkpoint.md)。
 - 本日连续完成：
   - `51efd2af` 命令清单单一真源；
@@ -157,5 +166,12 @@ C2c2最终179/179构建步骤、新实际DLL／Host14组及同产物18项headles
   - `0bc7ba51` 保存原子性与 v3 显式输出；
   - `714ebafd` 工作正文发布顺序与草稿基线。
 - 最近一次验证：本片 `verify-work-documents` `developer-55b6032eaaef/`（`CUTRANS_WORK_DOCUMENTS_VERIFY_OK`）、`resource_library` 测试二进制单独运行 143/143、`build test` `developer-6230dc80ded0/`、`verify-architecture` 退出 0、`verify-repository` 退出 0；此前 `verify-write-order` `developer-5b8e33bdb0d2/`（`CUTRANS_WRITE_ORDER_OK checks=4`）、`test-nanoui-desktop` `developer-ae8b73268866/`、`verify-local-sources` `developer-593019ce8e31/`（证据 `local-sources-f511496e014d/`）、`verify-unknown-result` `developer-deaa34671ca8/`（证据 `unknown-result-acbfc979349f/`）。
-- 当前边界：未决结果的 Host/Shell 两段已闭环；目录收纳只按标签复用逻辑文件夹，不记录源目录绝对路径，不是目录整体收纳；`.cut` 保存与工作正文/草稿的发布顺序已修，容量与回收（8 个外部来源、8 个授权槽、32 个库资源均无删除）和 `asset.export` 目标边界仍未修；真实 GUI/IME、安装升级卸载和真实媒体仍未验收。
-- 下一步建议：做容量与回收（`source.remove`/`library.remove` 与槽位回收）以及 `asset.export` 的目标白名单；`build test` 的构建运行器失败、vne 测试覆盖、GUI 客户端落后重同步三项需要单独排期，不能再用"退出 0"单独作为全绿证据。
+- 当前边界：未决结果的 Host/Shell 两段已闭环；目录收纳只按标签复用逻辑文件夹，不记录源目录绝对路径，不是目录整体收纳；`.cut` 保存与工作正文/草稿的发布顺序已修；库条目和空文件夹已可经 `library.remove` 删除（无活引用才允许），最后一个引用删除时释放持久授权，容量满时显式返回 `queue_full`。但非持久授权（`doc.open`、`asset_open_external`、导出快照）在会话内仍不释放，孤儿字节没有物理回收，`asset.export` 目标边界仍未修；真实 GUI/IME、安装升级卸载和真实媒体仍未验收。
+- 下一步顺序（2026-11-12 用户确认，取代审计检查点与本段旧版“下一步建议”；只保留这一份，理由见[评审交接](2026-11-12-review-handoff.md)第四节）：
+  1. ~~**容量与回收（窄版）**~~（2026-11-12 已验证，见上）：容量错误显式化 + “无引用才可删除”，覆盖库资源／文件夹 `[32]`、外部来源 `[8]`、授权槽 `[8]`；删除前检查 History before／after 文档、排队／归档 Job 固定的 hash、`library/versions/` 留存及共用授权槽的 `doc.open`／`asset_open_external`／导出快照。
+  2. **vne 测试根**：`vne/root.zig` 没有 `test` 块，`vne/*.zig` 的测试不被发现；启用后预期会暴露从未运行过的失败，并须确认发现的测试数上升。
+  3. **v4 格式 ADR（无代码）**：作用域化 comp ID、多输出、时间维度、不整份复制文档的快照模型、v1–v3 迁移规则。
+  4. **D 声明注册表**，建立在 v4 上。
+  5. **两项小修**（可插到更早位置）：`allow_migration` 从 RPC `id` 移入 payload（客户端与 Host 两侧）；`.command_result` 依 `vne/commands.zig` 拒绝 managed／runtime_only。其它小修候选：`asset.export` 目标白名单、`work_model` 收到 `stale_version` 后重读快照。
+  - `build test` 构建运行器失败仍需单独排期；“退出 0”不能单独作为全绿证据。
+  - 新增待排期：`verify-resource-registration` 的受管根边界回归（见上）；Zig 标准库 loader 间歇异常本日连续出现（本会话 12 次构建中 4 次触发，每次文件不同，HEAD 上同样出现），已明显影响验证效率。

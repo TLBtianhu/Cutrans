@@ -397,12 +397,42 @@ def _verify_library_lifecycle(library: ctypes.WinDLL, runtime_dir: Path, root: P
         owned_version.write_bytes(b"tampered")
         library_projection(library, restored, 5)
         command(restored, "asset.open", "library://1", expected=8)
+        # library.remove through the real command entry: a non-empty folder, a
+        # resource the saved document still names and an unknown id are
+        # refused without changing the catalog; an empty folder is removed and
+        # a later folder never reuses its identity.
+        before_remove, _ = library_projection(library, restored, 5)
+        empty_folder = before_remove.entries[2].id
+        command(restored, "library.remove", "3", expected=5)
+        command(restored, "library.remove", "2", expected=5)
+        command(restored, "library.remove", "99", expected=5)
+        refused, _ = library_projection(library, restored, 5)
+        if refused.revision != before_remove.revision:
+            raise RuntimeError("refused library.remove changed the catalog")
+        command(restored, "library.remove", str(empty_folder))
+        removed, labels = library_projection(library, restored, 4)
+        if removed.revision <= refused.revision or labels != ["素材", "主角", "library-source.png", "renamed.png"]:
+            raise RuntimeError("library.remove did not remove exactly the empty folder")
+        command(restored, "library.folder.create", "0 temporary")
+        recreated, _ = library_projection(library, restored, 5)
+        new_ids = {entry.id for entry in recreated.entries[: recreated.count]} - {entry.id for entry in removed.entries[: removed.count]}
+        if len(new_ids) != 1 or next(iter(new_ids)) <= empty_folder:
+            raise RuntimeError("a removed folder identity was reused")
+        command(restored, "library.remove", str(next(iter(new_ids))))
+        library_projection(library, restored, 4)
     finally:
         library.cutrans_vm_destroy(restored)
+    removed_restart = create()
+    try:
+        _, labels = library_projection(library, removed_restart, 4)
+        if labels != ["素材", "主角", "library-source.png", "renamed.png"]:
+            raise RuntimeError("library.remove did not persist across restart")
+    finally:
+        library.cutrans_vm_destroy(removed_restart)
     catalog_path = data_dir / "library/catalog.json"
     catalog_text = catalog_path.read_text(encoding="utf-8")
     manifest = json.loads(catalog_text)
-    if manifest["format"] != "cutrans-resource-library/2" or len(manifest["folders"]) != 3:
+    if manifest["format"] != "cutrans-resource-library/4" or len(manifest["folders"]) != 2:
         raise RuntimeError("physical catalog does not contain the logical folder tree")
     manifest["folders"][0]["parent_id"] = 4
     catalog_path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -418,7 +448,7 @@ def _verify_library_lifecycle(library: ctypes.WinDLL, runtime_dir: Path, root: P
         raise RuntimeError("corrupt library catalog was accepted or replaced")
     if catalog_path.read_text(encoding="utf-8") != "not-json":
         raise RuntimeError("invalid catalog was silently repaired")
-    print("CUTRANS_LIBRARY_OK reference=1 detach=1 id_preserved=1 restore=1 create=1 catalog_unloaded=1 provenance=1 restart_catalog=1 folders=1 folder_ids=1 rename=1 move=1 cycle_rejected=1 orphan_rejected=1 tamper_rejected=1 corrupt_catalog=1")
+    print("CUTRANS_LIBRARY_OK reference=1 detach=1 id_preserved=1 restore=1 create=1 catalog_unloaded=1 provenance=1 restart_catalog=1 folders=1 folder_ids=1 rename=1 move=1 cycle_rejected=1 orphan_rejected=1 tamper_rejected=1 corrupt_catalog=1 remove_refused=1 remove_empty_folder=1 remove_persisted=1")
 
 
 def _verify_snapshot_lifecycle(library: ctypes.WinDLL, runtime_dir: Path, root: Path, mode: str) -> None:

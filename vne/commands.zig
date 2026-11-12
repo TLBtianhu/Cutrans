@@ -43,6 +43,7 @@ pub const forwarded = [_][]const u8{
     "library.folder.create",
     "library.rename",
     "library.move",
+    "library.remove",
     "library.list",
     "editor.asset.insert",
 };
