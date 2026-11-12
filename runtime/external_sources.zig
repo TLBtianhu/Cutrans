@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const RuntimeContext = @import("context.zig").Context;
-const storage = @import("storage.zig");
+const storage = @import("vne").atomic_write;
 const command = @import("vne").command;
 const file_identity = @import("ports").file_identity;
 const source_boundary = @import("source_boundary.zig");

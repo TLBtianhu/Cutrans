@@ -138,9 +138,11 @@ C2c2最终179/179构建步骤、新实际DLL／Host14组及同产物18项headles
 
 2026-11-12 未决请求停止等待（Host/Shell 两段闭环）：`vm_client` 新增 `hasPending`/`abandonPending`，编辑器在结果未确认时显示警告和“停止等待未确认修改”。停止等待只结束客户端等待，不重放也不回滚；刷新后的文档镜像显示 VM 真实状态，后续编辑用刷新后的 expected stamp 防止旧请求晚到造成静默覆盖。`data/shell/pending-unknown.txt` 在 Shell 重启后继续提示“可能已执行”，确认后清除且标记不携带可重放请求。新增 `verify-unknown-result`：真实 Host 提交后丢回复、Shell 保留 pending、重启后 `wrong_epoch` 清空且不重复提交、新 identity 显式编辑成功；并验证 pending 时 Shell 退出后下一个 Shell 打印 `CUTRANS_UNKNOWN_HISTORICAL` 并完成普通桌面场景。单元测试、`test-nanoui-desktop` 与 `verify-payload` 通过；按钮点击、取消/回滚协议、真实 GUI/IME 与安装验收仍未覆盖。详见 [停止等待入口](2026-11-12-pending-wait-stop.md)。
 
+2026-11-12 保存原子性与 v3 显式输出：`.cut` 落盘改用 `vne/atomic_write.zig` 的临时文件＋flush＋原子替换（此前是全仓唯一一处截断式持久写，同文件已存在正确原语）；History journal 记录并还原 `dirty`/`legacy`，恢复不再无条件声称已保存；`doc.save` 改为写前日志(pending)→原子目标→确认标记，确认失败只降级状态栏。canonical v3 要求显式 `output=`，行对齐截断不再被接受（v1/v2 隐式输出迁移不变）。新增 `verify-write-order`（4 项真机断言）与 `vne/documents.zig` 测试根。同片暴露三项未修复问题：vne 模块根测试从未执行、两个既有锁测试因 `SHARING_VIOLATION` panic 稳定失败、panic 型失败不改变 `build test` 退出码。`build test`、`verify-write-order`、`verify-architecture`、`verify-repository` 退出 0；真实 GUI/IME、安装与掉电注入未验收。详见 [保存原子性](2026-11-12-atomic-save-and-v3-output.md)。
+
 ## 2026-11-12 进度快照
 
-- 当前 `master` 为 `fdbe3ab6`，工作区干净，远端已同步。
+- 当前 `master` 为 `fdbe3ab6`；本片改动（保存原子性、v3 显式输出、`verify-write-order`）**已实施并验证，尚未提交**，工作区因此不干净。
 - 本日连续完成：
   - `51efd2af` 命令清单单一真源；
   - `a8769edb` ABI 接线审计与 portable 残留清理；
@@ -150,6 +152,6 @@ C2c2最终179/179构建步骤、新实际DLL／Host14组及同产物18项headles
   - `64f601ea` 闭环记忆；
   - `56388fd3` 目录成员显式收纳；
   - `fdbe3ab6` README／文档导航刷新，并确立“用户可见能力变化时同片更新 README”的长期规则。
-- 最近一次验证：`build test` `developer-118145594305/`、`test-nanoui-desktop` `developer-ae8b73268866/`、`verify-local-sources` `developer-593019ce8e31/`（证据 `local-sources-f511496e014d/`）、`verify-unknown-result` `developer-deaa34671ca8/`（证据 `unknown-result-acbfc979349f/`）、`verify-repository` `developer-8f6ba36f2578/`。
-- 当前边界：未决结果的 Host/Shell 两段已闭环；目录收纳只按标签复用逻辑文件夹，不记录源目录绝对路径，不是目录整体收纳；真实 GUI/IME、安装升级卸载和真实媒体仍未验收。
-- 下一步建议是[架构评审与收敛方案](2026-11-12-architecture-review.md)的阶段 0 + 命令 manifest v2 + `verify-contract`；该记录是**建议，未实施、未批准**。
+- 最近一次验证：本片 `verify-write-order` `developer-5b8e33bdb0d2/`（`CUTRANS_WRITE_ORDER_OK checks=4`）、`build test` `developer-21ae574309d1/`（仅既有锁测试失败）、`verify-architecture` 退出 0、`verify-repository` 退出 0；此前 `test-nanoui-desktop` `developer-ae8b73268866/`、`verify-local-sources` `developer-593019ce8e31/`（证据 `local-sources-f511496e014d/`）、`verify-unknown-result` `developer-deaa34671ca8/`（证据 `unknown-result-acbfc979349f/`）、`verify-repository` `developer-8f6ba36f2578/`。
+- 当前边界：未决结果的 Host/Shell 两段已闭环；目录收纳只按标签复用逻辑文件夹，不记录源目录绝对路径，不是目录整体收纳；保存路径已原子化，但 `createWork`/`saveWorkDraft` 的发布顺序问题未修；真实 GUI/IME、安装升级卸载和真实媒体仍未验收。
+- 下一步建议：先修 [架构评审](2026-11-12-architecture-review.md) 未覆盖的两处容量与回收问题，或按计划继续 `createWork`/draft 发布语义；`build test` 的退出码与 vne 测试覆盖问题需要单独确认，不能再用"退出 0"单独作为全绿证据。

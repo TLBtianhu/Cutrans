@@ -70,7 +70,7 @@ c1=gain{ in:c0,value:0.8 }
 output=c1
 ```
 
-实际图像节点同时记录来源与采用的SHA；v1／v2输入仍可迁移。规范格式、身份与内容指纹由Runtime解析器定义，不由UI另写一套。
+实际图像节点同时记录来源与采用的SHA；v1／v2输入仍可迁移。规范格式、身份与内容指纹由Runtime解析器定义，不由UI另写一套。`version=3` 必须显式声明 `output=`：省略该行不再退化为“最后一个节点即输出”，而是解析失败——行对齐的截断文件与手写漏行都会被拒绝，避免交付内容静默改变。
 
 `vne/uri.zig` 与 `vne/mounts.zig` 提供虚拟根和授权表：`pack` 只读，`session/cache/temp` 可写，`external` 需要实例内授权。`doc.open`/`doc.save` 只接受 VNE URI；绝对路径先经 Native 授权换成 `external://id`，不能直接穿过文档命令。`.cut` 使用 `version=3`，图片可引用 Pack、带 SHA-256 的 Session 快照、持久 external 授权或 `library://` 资源，v1/v2 可读并迁移，所有 Pack 的 `document_schema` 同步为 3。`library://` 必须经过资源目录，不是普通挂载路径；持久授权的真实路径只保存在 Session 授权目录，临时句柄不能作为文档 Source。授权句柄是实例内能力，不是跨系统路径或完整安全沙箱。
 

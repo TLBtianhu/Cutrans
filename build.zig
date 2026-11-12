@@ -595,6 +595,10 @@ pub fn build(b: *std.Build) void {
     const reconnect_verify = pack_support.verify(b, "tools/verify_reconnect.py", &.{});
     reconnect_verify.step.dependOn(portable_step);
     reconnect_step.dependOn(&reconnect_verify.step);
+    const write_order_step = b.step("verify-write-order", "Verify canonical document tails and the save recovery marker");
+    const write_order_verify = pack_support.verify(b, "tools/verify_write_order.py", &.{});
+    write_order_verify.step.dependOn(portable_step);
+    write_order_step.dependOn(&write_order_verify.step);
     const unknown_result_step = b.step("verify-unknown-result", "Verify a committed edit whose reply is lost across a Host restart");
     const unknown_result_verify = pack_support.verify(b, "tools/verify_unknown_result.py", &.{});
     unknown_result_verify.step.dependOn(portable_step);
@@ -723,6 +727,10 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run headless runtime and UI model tests");
     test_support.addModule(b, test_step, vne);
+    // A module root alone discovers no tests: Zig only analyses reachable
+    // declarations, so vne/root.zig re-exports contributed nothing. Canonical
+    // .cut and atomic-write invariants are asserted here explicitly.
+    test_support.addSource(b, test_step, "vne/documents.zig", target, optimize, &.{});
     const runtime_suites = test_support.RuntimeSuites{
         .b = b,
         .step = test_step,

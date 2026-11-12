@@ -16,7 +16,7 @@ Cutrans 的核心不是复制一个传统剪辑器，而是建立一个**声明�
 
 当前实例化RuntimeContext，支持Surface的full／dock／floating、焦点与命中、系统任务栏和CCB启动清单。主桌面已统一为NanoUI页面投影，旧CUI已移除；桌面、CLI、编辑器和资源管理器按App分责，不要求每个App独立进程。命令注册表和帧边界队列是`vne.command`，Runtime与Shell共享；Runtime继续通过`runtime.command`兼容导出。预览帧经ABI11的`preview_info`/`preview_read`由VM产出，Shell只接收BGRA8帧并回执，不再在本地跑文档预览DAG。桌面Shell改用`vm_client.Context`，只持有命令、文档镜像、资源/库/播放/设备视图与路径，不再实例化`RuntimeContext`；PNG编解码在共享`imaging`模块，`vm_client`不再直接导入Runtime。
 
-`.cut v3`描述图像DAG，支持resolution、fps、testsrc、gain、invert、over、image、resize与显式output。规范身份`Birth{inspire,transform,aggregate}`和聚合参数`AggIn{x,y,opacity,t}`进入规范化文本；指纹使用固定宽度、小端整数及明确浮点位模式。v1／v2仍可读并迁移。
+`.cut v3`描述图像DAG，支持resolution、fps、testsrc、gain、invert、over、image、resize与显式output（v3必须显式写 `output=`，省略即解析失败，防止行对齐截断被当成合法文档）。规范身份`Birth{inspire,transform,aggregate}`和聚合参数`AggIn{x,y,opacity,t}`进入规范化文本；指纹使用固定宽度、小端整数及明确浮点位模式。v1／v2仍可读并迁移。
 
 ## 文档、History与作业
 

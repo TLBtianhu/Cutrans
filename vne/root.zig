@@ -2,6 +2,7 @@ pub const abi = @import("abi.zig");
 pub const command = @import("command.zig");
 pub const commands = @import("commands.zig");
 pub const documents = @import("documents.zig");
+pub const atomic_write = @import("atomic_write.zig");
 pub const status = @import("status.zig");
 pub const paths = @import("paths.zig");
 pub const preview = @import("preview.zig");

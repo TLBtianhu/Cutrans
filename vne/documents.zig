@@ -4,6 +4,7 @@
 //! over 先限定两个输入,不宣称完整 Cutrans 语言、效果器或渲染器已经实现。
 
 const std = @import("std");
+const atomic_write = @import("atomic_write.zig");
 const high_water_prefix = "// cutrans.node-id-high-water-v1=";
 
 pub const Op = enum { testsrc, gain, invert, over, image, resize };
@@ -541,6 +542,11 @@ pub fn parse(text: []const u8) !Document {
         if (!hasComp(&doc, output)) return error.InvalidReference;
         doc.output_id = output;
     }
+    // Canonical v3 always declares its output explicitly, and emitAlloc writes
+    // that line last. Accepting an implicit last-node output would also accept a
+    // line-aligned truncation that dropped the output line and silently changed
+    // what the document delivers.
+    if (saw_version and version >= 3 and output_override == null) return error.MissingOutput;
     if (saw_version and version == 2 and doc.legacy_paths) return error.InvalidResourcePath;
     if ((!saw_version or version < 3) and doc.hasV3Source()) return error.InvalidResourcePath;
     doc.legacy = !saw_version or version == 1;
@@ -631,7 +637,9 @@ pub fn save(doc: *Document, io: std.Io, allocator: std.mem.Allocator, dir: std.I
     try validPath(path);
     const text = try emitAlloc(doc, allocator);
     defer allocator.free(text);
-    try dir.writeFile(io, .{ .sub_path = path, .data = text });
+    // A delivered .cut is the user's artifact, not scratch state: it must never
+    // be observable as a truncated prefix after a crash or a full disk.
+    try atomic_write.writeAtomic(dir, io, path, text);
     doc.dirty = false;
     doc.legacy = false;
     doc.legacy_paths = false;
@@ -653,7 +661,7 @@ pub fn saveExternal(doc: *Document, io: std.Io, allocator: std.mem.Allocator, pa
     try validExternalPath(path);
     const text = try emitAlloc(doc, allocator);
     defer allocator.free(text);
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = text });
+    try atomic_write.writeAtomic(std.Io.Dir.cwd(), io, path, text);
     doc.dirty = false;
     doc.legacy = false;
     doc.legacy_paths = false;
@@ -756,6 +764,22 @@ test "legacy documents migrate to version three and unknown versions fail" {
     try std.testing.expectEqual(doc.fingerprint(), migrated.fingerprint());
     try std.testing.expectError(error.UnsupportedVersion, parse("version=4\nc0=testsrc{}\n"));
     try std.testing.expectError(error.DuplicateVersion, parse("version=2\nversion=2\nc0=testsrc{}\n"));
+}
+
+test "canonical version three requires an explicit output declaration" {
+    const complete = "version=3\nresolution=1x1\nfps=30\nnodes:\nc0=testsrc{}\noutput=c0\n";
+    var doc = try parse(complete);
+    try std.testing.expectEqual(@as(u64, 0), doc.outputId().?);
+    // A line-aligned truncation removes the trailing output line. Accepting the
+    // implicit last-node output would hide that loss and change the deliverable.
+    const truncated = "version=3\nresolution=1x1\nfps=30\nnodes:\nc0=testsrc{}\n";
+    try std.testing.expectError(error.MissingOutput, parse(truncated));
+    // Legacy versions keep their existing implicit-output migration path.
+    var legacy = try parse("resolution=1x1\nfps=30\nc0=testsrc{}\n");
+    try std.testing.expect(legacy.legacy);
+    const migrated = try emitAlloc(&legacy, std.testing.allocator);
+    defer std.testing.allocator.free(migrated);
+    try std.testing.expect(std.mem.endsWith(u8, migrated, "output=c0\n"));
 }
 
 test "version two requires pack URIs and migrates legacy image paths" {

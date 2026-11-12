@@ -6,7 +6,7 @@
 const std = @import("std");
 const command = @import("vne").command;
 const tasks = @import("tasks.zig");
-const storage = @import("storage.zig");
+const storage = @import("vne").atomic_write;
 
 pub const journal_path = "tasks/journal.txt";
 pub const legacy_archive_path = "tasks/legacy-journal-v1.txt";

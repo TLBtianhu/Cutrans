@@ -6,7 +6,7 @@ const tasks = @import("tasks.zig");
 const job_mod = @import("export_job.zig");
 const documents = @import("vne").documents;
 const command = @import("vne").command;
-const storage = @import("storage.zig");
+const storage = @import("vne").atomic_write;
 const workspace = @import("vne").workspace;
 
 pub const max_record_bytes = 128 * 1024;

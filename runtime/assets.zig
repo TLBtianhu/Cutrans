@@ -3,7 +3,7 @@ const vne = @import("vne");
 const RuntimeContext = @import("context.zig").Context;
 const command = @import("vne").command;
 const image = @import("image.zig");
-const storage = @import("storage.zig");
+const storage = @import("vne").atomic_write;
 
 pub const SourceKind = enum { pack, external, snapshot, library };
 pub const SourceIdentity = union(enum) {

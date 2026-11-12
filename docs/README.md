@@ -20,6 +20,7 @@
 
 - [项目记忆](../MEMORY.md)：宪法、主题索引和最新实施记录。
 - [现役状态](memory/current.md)：当前实现、原型限额和未完成范围。
+- [保存原子性与 v3 显式输出](memory/2026-11-12-atomic-save-and-v3-output.md)：`.cut` 原子替换、journal 还原保存标志、v3 必须显式 `output=`，以及测试基础设施暴露的三个问题。
 - [目录成员显式收纳](memory/2026-11-12-directory-member-collection.md)：本机文件收录到同名逻辑文件夹、成员关系与隐藏 GUI 验证。
 - [架构评审与收敛方案（建议，未实施）](memory/2026-11-12-architecture-review.md)：清晰度标准、结构债与分阶段收敛路线。
 - [未决请求：停止等待与跨 Shell 标记](memory/2026-11-12-pending-wait-stop.md)：`wrong_epoch` 清空、跨 Shell 提示、不重放和不重复提交。

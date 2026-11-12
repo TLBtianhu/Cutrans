@@ -6,7 +6,7 @@
 const std = @import("std");
 const documents = @import("vne").documents;
 const history = @import("history.zig");
-const storage = @import("storage.zig");
+const storage = @import("vne").atomic_write;
 
 pub const journal_path = "documents/history.txt";
 const codec = std.base64.standard_no_pad;
@@ -50,7 +50,7 @@ pub fn saveView(value: View, doc: *const documents.Document, allocator: std.mem.
     var out = std.ArrayList(u8).empty;
     defer out.deinit(allocator);
     try out.appendSlice(allocator, "cutrans_history=1\n");
-    try appendFmt(&out, allocator, "fingerprint={d}\ncursor={d}\ncount={d}\ndocument=", .{ doc.fingerprint(), value.cursor, value.count() });
+    try appendFmt(&out, allocator, "fingerprint={d}\ncursor={d}\ncount={d}\ndirty={d}\nlegacy={d}\ndocument=", .{ doc.fingerprint(), value.cursor, value.count(), @intFromBool(doc.dirty), @intFromBool(doc.legacy) });
     try appendDocument(&out, allocator, doc);
     try out.appendSlice(allocator, "\n");
     for (0..value.count()) |index| {
@@ -214,6 +214,12 @@ fn observeEditIds(doc: *documents.Document, edit: history.Edit) void {
     }
 }
 
+fn flag(text: []const u8) !bool {
+    if (std.mem.eql(u8, text, "0")) return false;
+    if (std.mem.eql(u8, text, "1")) return true;
+    return error.InvalidHistoryJournal;
+}
+
 pub fn load(value: *history.History, doc: *documents.Document, allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !bool {
     const text = dir.readFileAlloc(io, journal_path, allocator, .limited(4 * 1024 * 1024)) catch |err| {
         if (err == error.FileNotFound) return false;
@@ -226,6 +232,8 @@ pub fn load(value: *history.History, doc: *documents.Document, allocator: std.me
     var restored_doc: ?documents.Document = null;
     var expected_fingerprint: ?u64 = null;
     var declared_count: ?usize = null;
+    var declared_dirty: ?bool = null;
+    var declared_legacy: ?bool = null;
     var saw_header = false;
     var saw_cursor = false;
     var lines = std.mem.splitScalar(u8, text, '\n');
@@ -246,6 +254,12 @@ pub fn load(value: *history.History, doc: *documents.Document, allocator: std.me
             if (declared_count != null) return error.InvalidHistoryJournal;
             declared_count = try unsigned(usize, line["count=".len..]);
             if (declared_count.? > restored.entries.len) return error.InvalidHistoryJournal;
+        } else if (std.mem.startsWith(u8, line, "dirty=")) {
+            if (declared_dirty != null) return error.InvalidHistoryJournal;
+            declared_dirty = try flag(line["dirty=".len..]);
+        } else if (std.mem.startsWith(u8, line, "legacy=")) {
+            if (declared_legacy != null) return error.InvalidHistoryJournal;
+            declared_legacy = try flag(line["legacy=".len..]);
         } else if (std.mem.startsWith(u8, line, "document=")) {
             if (restored_doc != null) return error.InvalidHistoryJournal;
             restored_doc = try parseDocument(allocator, line["document=".len..]);
@@ -262,7 +276,12 @@ pub fn load(value: *history.History, doc: *documents.Document, allocator: std.me
     for (restored.entries[0..restored.count]) |edit| observeEditIds(&current_doc, edit);
     value.* = restored.*;
     doc.* = current_doc;
-    doc.dirty = false;
+    // The journal restores the in-memory declaration; it does not prove that the
+    // delivered artifact reached disk. Persist and restore the real flags, and
+    // keep the old "assume synced" behavior for journals written before they
+    // existed so an upgrade does not alarm every existing data root.
+    doc.dirty = declared_dirty orelse false;
+    doc.legacy = declared_legacy orelse false;
     return true;
 }
 
@@ -295,6 +314,31 @@ test "history journal restores cursor edits and full replacements" {
     try std.testing.expect(restored.undo(&restored_doc));
     try std.testing.expectEqual(previous_output, restored_doc.outputId());
     try std.testing.expectEqual(before.count, restored_doc.count);
+}
+
+test "journal restores the persisted save flags instead of assuming a clean artifact" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var value: history.History = .{};
+    var doc = documents.Document.initDefault();
+    try doc.setGain(1, 0.25);
+    try std.testing.expect(doc.dirty);
+    try save(&value, &doc, std.testing.allocator, std.testing.io, tmp.dir);
+
+    var restored: history.History = .{};
+    var restored_doc = documents.Document.initDefault();
+    try std.testing.expect(try load(&restored, &restored_doc, std.testing.allocator, std.testing.io, tmp.dir));
+    try std.testing.expectEqual(doc.fingerprint(), restored_doc.fingerprint());
+    try std.testing.expect(restored_doc.dirty);
+
+    doc.dirty = false;
+    doc.legacy = true;
+    try save(&value, &doc, std.testing.allocator, std.testing.io, tmp.dir);
+    var clean: history.History = .{};
+    var clean_doc = documents.Document.initDefault();
+    try std.testing.expect(try load(&clean, &clean_doc, std.testing.allocator, std.testing.io, tmp.dir));
+    try std.testing.expect(!clean_doc.dirty);
+    try std.testing.expect(clean_doc.legacy);
 }
 
 test "corrupt or mismatched history preserves the last valid state" {

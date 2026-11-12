@@ -93,9 +93,10 @@ fn save(c: command.Command, opaque_ptr: *anyopaque) command.Result {
     if (changes_flags and ctx.document_revision == std.math.maxInt(u64)) return .failure(.failed);
     const resolved = if (c.arg) |path| resolvePath(ctx, path, true) catch return .failure(.invalid_arguments) else null;
     defer if (resolved) |target| ctx.allocator.free(target.path);
-    // This is not a transaction over two files. Check/persist the internal
-    // edit state before writing the destination so a journal failure cannot
-    // misreport an already successful external save as an unperformed save.
+    // This is not a transaction over two files. The write-ahead journal keeps
+    // "pending" until the destination is durable, so a crash between the two
+    // writes restores the new declaration and reports it as unsaved instead of
+    // silently losing it.
     persistHistory(ctx) catch return .failure(.failed);
     if (resolved) |target| {
         documents.saveExternal(&ctx.document, io_value, ctx.allocator, target.path) catch return .failure(.failed);
@@ -104,8 +105,18 @@ fn save(c: command.Command, opaque_ptr: *anyopaque) command.Result {
         defer data_dir.close(io_value);
         documents.save(&ctx.document, io_value, ctx.allocator, data_dir, "documents/session.cut") catch return .failure(.failed);
     }
-    if (changes_flags) ctx.document_revision += 1;
-    ctx.status.set("文档已保存");
+    var confirmed = true;
+    if (changes_flags) {
+        // The destination is durable now; confirm the marker. A failed
+        // confirmation stays conservative ("still pending") and must not turn a
+        // durable save into a reported failure.
+        persistHistory(ctx) catch |err| {
+            confirmed = false;
+            std.debug.print("[doc-save] 恢复标记确认失败: {s}\n", .{@errorName(err)});
+        };
+        ctx.document_revision += 1;
+    }
+    ctx.status.set(if (confirmed) "文档已保存" else "文档已保存,恢复标记未更新");
     return .success;
 }
 
