@@ -698,8 +698,7 @@ fn acceptShellIdentity(runtime: *activation.Activation, allow_migration: bool, p
     return abi.Status.ok;
 }
 
-fn jobsReply(allocator: std.mem.Allocator, api: *const activation.Api, handle: ?*anyopaque, after_id: u64) !@import("host").shell_rpc.Reply {
-    var required: usize = 0;
+fn jobsReply(allocator: std.mem.Allocator, api: *const activation.Api, handle: ?*anyopaque, after_id: u64) !@import("host").shell_rpc.Reply {    var required: usize = 0;
     const query_status = api.jobs_read(handle, after_id, null, 0, &required);
     if (query_status != abi.Status.buffer_too_small) return .{ .status = if (query_status == abi.Status.ok) abi.Status.failed else query_status };
     if (required == 0 or required > max_jobs_json) return .{ .status = abi.Status.failed };
@@ -753,6 +752,10 @@ pub fn runHost(init: std.process.Init) !void {
     try runtime.commit();
     var jobs_driver: @import("host").pump_driver.Driver = undefined;
     try jobs_driver.start(init.io, handle, api.jobs_pump);
+    // Verification-only fault injection: commit the first workspace request,
+    // then close the connection without replying. It is read once at startup so
+    // the RPC path never depends on libc or on later environment changes.
+    var test_drop_workspace_reply = init.environ_map.get("CUTRANS_TEST_DROP_WORKSPACE_REPLY") != null;
     // This defer is registered after Runtime.destroy, so it joins before the
     // Runtime and the function pointer's DLL can be released.
     defer jobs_driver.deinit();
@@ -871,6 +874,11 @@ pub fn runHost(init: std.process.Init) !void {
                 };
                 defer reply.deinit();
                 jobs_driver.notify();
+                if (test_drop_workspace_reply and request.rpc.?.kind == .workspace_submit) {
+                    test_drop_workspace_reply = false;
+                    std.debug.print("CUTRANS_HOST_TEST_DROPPED_REPLY\n", .{});
+                    continue;
+                }
                 if (reply.status != abi.Status.ok and reply.status != abi.Status.accepted) std.debug.print("[shell-rpc] {s} status={d}\n", .{ @tagName(request.rpc.?.kind), reply.status });
                 request.replyRpc(reply.status, reply.value, reply.payload) catch {};
             },

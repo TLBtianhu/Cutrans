@@ -595,6 +595,10 @@ pub fn build(b: *std.Build) void {
     const reconnect_verify = pack_support.verify(b, "tools/verify_reconnect.py", &.{});
     reconnect_verify.step.dependOn(portable_step);
     reconnect_step.dependOn(&reconnect_verify.step);
+    const unknown_result_step = b.step("verify-unknown-result", "Verify a committed edit whose reply is lost across a Host restart");
+    const unknown_result_verify = pack_support.verify(b, "tools/verify_unknown_result.py", &.{});
+    unknown_result_verify.step.dependOn(portable_step);
+    unknown_result_step.dependOn(&unknown_result_verify.step);
     const safe_exit_step = b.step("verify-safe-exit", "Verify environment exit admission, job draining, retry and NanoUI draft protection");
     const safe_exit_verify = pack_support.verify(b, "tools/verify_safe_exit.py", &.{});
     safe_exit_verify.step.dependOn(portable_step);

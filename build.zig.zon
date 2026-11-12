@@ -65,6 +65,7 @@
         "tools/verify_isolation.py",
         "tools/verify_preview.py",
         "tools/verify_reconnect.py",
+        "tools/verify_unknown_result.py",
         "tools/verify_edit_commit.py",
         "tools/verify_workspace.py",
         "tools/verify_workspace_rpc.py",

@@ -52,7 +52,7 @@ NanoUI `0.14.0`（官方 `7b32272`）的固定源码副本位于 `third_party/na
 | 资源实际产物 | `verify-assets`、`verify-resource-versions`、`verify-source-identity`、`verify-resource-operations`、`verify-resident-resources`、`verify-resource-registration`、`verify-work-documents`、`verify-local-sources` |
 | Host／协议／回放 | `verify-host`、`verify-host-transport`、`verify-runtime`、`verify-replay`、`verify-input`、`verify-playback` |
 | 自动化／环境 | `verify-automation`、`verify-isolation`、`diag-user` |
-| Shell／GUI集成，单独安排 | `verify-shell`、`verify-attach`、`verify-nanoui-library`、`verify-nanoui-portable`、`verify-same-file`、`verify-static-runtime`、`verify-payload`、`verify-preview`、`verify-reconnect`、`verify-single-exe`、`verify-nanoui-chrome`、`verify-safe-exit` |
+| Shell／GUI集成，单独安排 | `verify-shell`、`verify-attach`、`verify-nanoui-library`、`verify-nanoui-portable`、`verify-same-file`、`verify-static-runtime`、`verify-payload`、`verify-preview`、`verify-reconnect`、`verify-unknown-result`、`verify-single-exe`、`verify-nanoui-chrome`、`verify-safe-exit` |
 | 安装器 | `installer`、`verify-installer-artifact`；完整登记测试另见下文 |
 | 架构边界 | `verify-architecture` |
 

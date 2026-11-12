@@ -94,7 +94,40 @@ fn reconnectDemo(state: *model.State) !void {
     return error.AutoReconnectTimeout;
 }
 
+fn unknownResultDemo(state: *model.State) !void {
+    const io = state.ctx.io orelse return error.IoNotReady;
+    const before = state.ctx.document.count;
+    const pending = state.ctx.command.dispatch(.{ .name = "editor.invert.add" });
+    if (pending.code != .not_ready or !vm_client.hasPending()) return error.UnknownResultPendingMissing;
+    const after_lost = state.ctx.document.count;
+    if (after_lost != before + 1) return error.UnknownResultCommitNotObserved;
+    std.debug.print("CUTRANS_UNKNOWN_PENDING nodes_before={d} nodes_after={d}\n", .{ before, after_lost });
+    const restarted = try std.fs.path.join(state.allocator, &.{ state.ctx.paths.data_dir, "unknown.host-restarted" });
+    defer state.allocator.free(restarted);
+    try waitForFile(state, restarted);
+    var attempts: usize = 0;
+    while (attempts < 300) : (attempts += 1) {
+        vm_client.pump(&state.ctx) catch {};
+        if (!vm_client.hasPending()) break;
+        std.Io.sleep(io, .{ .nanoseconds = 100 * std.time.ns_per_ms }, .awake) catch {};
+    }
+    if (vm_client.hasPending()) return error.UnknownResultNotCleared;
+    if (state.ctx.document.count != after_lost) return error.UnknownResultAppliedTwice;
+    std.debug.print("CUTRANS_UNKNOWN_CLEARED status={s}\n", .{state.ctx.status.get()});
+    const recovered = state.ctx.command.dispatch(.{ .name = "editor.invert.add" });
+    if (recovered.code != .ok) return error.UnknownResultRecoveryFailed;
+    const after_recovery = state.ctx.document.count;
+    if (after_recovery != after_lost + 1) return error.UnknownResultRecoveryMiscount;
+    std.debug.print("CUTRANS_UNKNOWN_NODES after_lost={d} after_recovery={d}\n", .{ after_lost, after_recovery });
+    std.debug.print("CUTRANS_UNKNOWN_RECOVERED\n", .{});
+    std.debug.print("CUTRANS_UNKNOWN_DEMO_DONE\n", .{});
+}
+
 fn verify(state: *model.State, config: *const abi.ShellConfig) !void {
+    if (std.c.getenv("CUTRANS_UNKNOWN_RESULT_DEMO") != null) {
+        try unknownResultDemo(state);
+        return;
+    }
     if (std.c.getenv("CUTRANS_RECONNECT_DEMO") != null or std.c.getenv("CUTRANS_RECONNECT_AUTO") != null) try reconnectDemo(state);
     state.showPage(.home);
     var tester: ui.Tester = undefined;

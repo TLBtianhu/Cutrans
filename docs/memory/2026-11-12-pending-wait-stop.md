@@ -20,10 +20,17 @@
 - `build test`：退出 0，`developer-d27aab7e00d4/`。
 - `test-nanoui-desktop`：首次因 `&self.ctx` 类型错误失败，改为 `self.ctx` 后退出 0，`developer-1f422dab92da/`。
 - `verify-payload`：退出 0，`developer-1f3bc3a7b66a/`；真实 Host + 隐藏 Shell 桌面场景仍通过。
+- `verify-unknown-result`：退出 0，`developer-3ab335f70856/`；证据 `unknown-result-b0817ecb9af8/`。
+  - Host 在验证环境变量下先提交第一条 workspace 请求，再关连接不回包；
+  - Shell 保留原请求并打印 `CUTRANS_UNKNOWN_PENDING`；
+  - Host 正常停止、重启（新 epoch）后，Shell 重试原请求得到 `wrong_epoch`，打印 `CUTRANS_UNKNOWN_CLEARED`，节点数未增加；
+  - 随后新 identity 的显式编辑成功，打印 `CUTRANS_UNKNOWN_RECOVERED`；
+  - 同一数据的普通隐藏桌面场景另行跑通。
 - 没有 ABI/协议字节变化；没有真实 GUI/IME 或安装验收。
 
 ## 边界
 
+- Host 的丢回复故障注入只由 `CUTRANS_TEST_DROP_WORKSPACE_REPLY` 在启动时读取一次，且只在验证脚本中使用；生产路径不设置该变量。
 - pending 仍只存在 Shell 内存中，关闭 Shell 会丢失“上次结果未确认”的提示；没有持久化 marker。
-- 没有取消或回滚协议；“停止等待”不保证旧请求未提交。
-- 真实 Host 的“提交后丢回复 + 重启”故障注入仍未做；当前验证是 Mock 级状态机加真实桌面回归。
+- 没有取消或回滚协议；“停止等待”不保证旧请求未提交，只保证后续编辑靠 expected stamp 拒绝晚到的旧提交。
+- 真实 GUI 视觉/IME 与安装验收仍不在本片范围。
