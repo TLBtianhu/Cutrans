@@ -69,7 +69,7 @@
 
 ## 最新实施记录
 
-- [2026-11-12 保存原子性与 v3 显式输出](docs/memory/2026-11-12-atomic-save-and-v3-output.md)：`.cut` 落盘改用 `vne/atomic_write.zig` 的临时文件＋flush＋原子替换（全仓此前唯一一处截断式持久写）；History journal 记录并还原 `dirty`/`legacy`，`doc.save` 改为写前日志→原子目标→确认标记；canonical v3 要求显式 `output=`，行对齐截断被拒。`verify-write-order`（4 项真机断言）、`verify-architecture`、`verify-repository`、`build test` 退出 0，新增 `vne/documents.zig` 测试根 22/22 通过。同片暴露三项未修复问题：**vne 模块根测试从未执行**、两个既有锁测试因 `SHARING_VIOLATION` panic 稳定失败（HEAD 同样复现）、panic 型失败不改变 `build test` 退出码。改动尚未提交。
+- [2026-11-12 保存原子性与 v3 显式输出](docs/memory/2026-11-12-atomic-save-and-v3-output.md)：`.cut` 落盘改用 `vne/atomic_write.zig` 的临时文件＋flush＋原子替换（全仓此前唯一一处截断式持久写）；History journal 记录并还原 `dirty`/`legacy`，`doc.save` 改为写前日志→原子目标→确认标记；canonical v3 要求显式 `output=`，行对齐截断被拒。`verify-write-order`（4 项真机断言）、`verify-architecture`、`verify-repository`、`build test` 退出 0，新增 `vne/documents.zig` 测试根 22/22 通过。同片暴露三项未修复问题：**vne 模块根测试从未执行**、两个既有锁测试因 `SHARING_VIOLATION` panic 稳定失败（HEAD 同样复现）、panic 型失败不改变 `build test` 退出码。已提交 `0bc7ba51`。
 
 - [2026-11-12 架构评审与收敛方案（建议，未实施）](docs/memory/2026-11-12-architecture-review.md)：定义“清晰”的可验收标准，列出 Runtime 单体、命令/ABI 多处接线、持久格式分散等结构债，并提出契约冻结、单一真源、域接口、数据生命周期、测试与构建、产品硬化六阶段。**尚未批准或实施**；建议从阶段 0 + 命令 manifest v2 + `verify-contract` 开始。
 

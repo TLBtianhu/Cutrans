@@ -142,7 +142,7 @@ C2c2最终179/179构建步骤、新实际DLL／Host14组及同产物18项headles
 
 ## 2026-11-12 进度快照
 
-- 当前 `master` 为 `fdbe3ab6`；本片改动（保存原子性、v3 显式输出、`verify-write-order`）**已实施并验证，尚未提交**，工作区因此不干净。
+- 当前 `master` 已包含本片：功能提交 `0bc7ba51`，其后只有一次 `docs:` 记忆更新（只改记录，未改产物），此前基线 `fdbe3ab6`；工作区干净。
 - 本日连续完成：
   - `51efd2af` 命令清单单一真源；
   - `a8769edb` ABI 接线审计与 portable 残留清理；
@@ -151,7 +151,8 @@ C2c2最终179/179构建步骤、新实际DLL／Host14组及同产物18项headles
   - `1e82ecc1` 跨 Shell 未确认标记；
   - `64f601ea` 闭环记忆；
   - `56388fd3` 目录成员显式收纳；
-  - `fdbe3ab6` README／文档导航刷新，并确立“用户可见能力变化时同片更新 README”的长期规则。
+  - `fdbe3ab6` README／文档导航刷新，并确立“用户可见能力变化时同片更新 README”的长期规则；
+  - `0bc7ba51` 保存原子性与 v3 显式输出（本片）。
 - 最近一次验证：本片 `verify-write-order` `developer-5b8e33bdb0d2/`（`CUTRANS_WRITE_ORDER_OK checks=4`）、`build test` `developer-21ae574309d1/`（仅既有锁测试失败）、`verify-architecture` 退出 0、`verify-repository` 退出 0；此前 `test-nanoui-desktop` `developer-ae8b73268866/`、`verify-local-sources` `developer-593019ce8e31/`（证据 `local-sources-f511496e014d/`）、`verify-unknown-result` `developer-deaa34671ca8/`（证据 `unknown-result-acbfc979349f/`）、`verify-repository` `developer-8f6ba36f2578/`。
 - 当前边界：未决结果的 Host/Shell 两段已闭环；目录收纳只按标签复用逻辑文件夹，不记录源目录绝对路径，不是目录整体收纳；保存路径已原子化，但 `createWork`/`saveWorkDraft` 的发布顺序问题未修；真实 GUI/IME、安装升级卸载和真实媒体仍未验收。
 - 下一步建议：先修 [架构评审](2026-11-12-architecture-review.md) 未覆盖的两处容量与回收问题，或按计划继续 `createWork`/draft 发布语义；`build test` 的退出码与 vne 测试覆盖问题需要单独确认，不能再用"退出 0"单独作为全绿证据。
