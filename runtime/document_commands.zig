@@ -764,6 +764,17 @@ test "shared commands create and retune a DAG" {
     try std.testing.expectEqual(command.Code.invalid_arguments, ctx.command.dispatch(.{ .name = "editor.over.add", .arg = "c0 c99" }).code);
 }
 
+test "runtime registry matches the shared command manifest" {
+    var ctx: RuntimeContext = undefined;
+    ctx.init(std.testing.allocator);
+    defer ctx.deinit();
+    register(&ctx);
+    const commands = @import("vne").commands;
+    try std.testing.expectEqual(commands.forwarded.len + commands.runtime_only.len, ctx.command.table.count());
+    for (commands.forwarded) |name| try std.testing.expect(ctx.command.table.contains(name));
+    for (commands.runtime_only) |name| try std.testing.expect(ctx.command.table.contains(name));
+}
+
 test "history commands undo redo and truncate branches" {
     var ctx: RuntimeContext = undefined;
     ctx.init(std.testing.allocator);

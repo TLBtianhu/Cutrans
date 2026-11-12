@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -14,6 +15,19 @@ import automation_process as process
 from verification_paths import BASE, claim, retain
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def child_environment() -> dict[str, str]:
+    """Keep `python` lookups on the interpreter that started this runner.
+
+    Zig build steps call `python` from PATH. The hidden launcher may run under
+    pythonw.exe with no Python on the inherited PATH, so resolve the companion
+    interpreter beside sys.executable instead of trusting the parent process.
+    """
+    environment = dict(os.environ)
+    interpreter_dir = str(Path(sys.executable).resolve().parent)
+    environment["PATH"] = interpreter_dir + os.pathsep + environment.get("PATH", "")
+    return environment
 
 
 def command_for(request: dict) -> tuple[list[str], bool]:
@@ -53,7 +67,7 @@ def main() -> int:
             status["action"] = request.get("action")
             command, console_tree = command_for(request)
             runner = process.run_console_tree if console_tree else process.run
-            result = runner(command, cwd=ROOT, stdin=process.subprocess.DEVNULL,
+            result = runner(command, cwd=ROOT, env=child_environment(), stdin=process.subprocess.DEVNULL,
                             stdout=log, stderr=process.subprocess.STDOUT)
             code = result.returncode
             status.update(exit=code, passed=code == 0)

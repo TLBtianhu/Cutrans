@@ -239,9 +239,7 @@ fn maybeReconnect(ctx: *RuntimeContext) void {
 fn allowedWhileStale(name: []const u8) bool {
     // Cleanup and stop controls must remain available after a projection fails.
     // Unrecognized future commands fail closed until the mirror is fresh.
-    inline for (.{ "asset.release", "task.cancel", "playback.stop", "doc.read", "task.list", "library.list", "asset.list", "playback.status" }) |allowed|
-        if (std.mem.eql(u8, name, allowed)) return true;
-    return false;
+    return vne.commands.isStaleAllowed(name);
 }
 
 fn pendingMessage(ctx: *RuntimeContext) void {
@@ -540,46 +538,7 @@ pub fn registerExternal(ctx: *RuntimeContext, path: []const u8) !u64 {
 
 pub fn register(ctx: *RuntimeContext) !void {
     try refreshMirrors(ctx);
-    const names = [_][]const u8{
-        "doc.open",
-        "doc.read",
-        "doc.write",
-        "doc.save",
-        "editor.gain.set",
-        "editor.invert.add",
-        "editor.over.add",
-        "editor.over.opacity.set",
-        "editor.image.open",
-        "editor.export.png",
-        "task.cancel",
-        "task.retry",
-        "task.list",
-        "editor.resize.add",
-        "history.undo",
-        "history.redo",
-        "playback.start",
-        "playback.status",
-        "playback.stop",
-        "asset.open",
-        "asset.ensure",
-        "resource.acquire",
-        "asset.check",
-        "asset.preview",
-        "asset.export",
-        "asset.release",
-        "asset.list",
-        "source.reauthorize",
-        "source.list",
-        "library.refresh",
-        "library.detach",
-        "library.create",
-        "library.folder.create",
-        "library.rename",
-        "library.move",
-        "library.list",
-        "editor.asset.insert",
-    };
-    for (names) |name| ctx.command.register(name, forward);
+    for (vne.commands.forwarded) |name| ctx.command.register(name, forward);
 }
 
 pub fn pump(ctx: *RuntimeContext) !void {

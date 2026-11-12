@@ -1,5 +1,6 @@
 //! Versioned document requests. ABI8 transports this independently versioned API.
 const std = @import("std");
+const commands = @import("commands.zig");
 
 pub const version: u32 = 1;
 pub const receipt_capacity = 64;
@@ -80,15 +81,11 @@ pub const Api = extern struct {
 /// Only document edits and snapshot-bound export admission are retry managed.
 /// Library, filesystem saving, and external grants keep their explicit legacy contracts.
 pub fn manages(name: []const u8) bool {
-    inline for (.{ "doc.open", "doc.save", "doc.write", "editor.gain.set", "editor.invert.add", "editor.over.add", "editor.over.opacity.set", "editor.resize.add", "editor.image.open", "editor.asset.insert", "editor.export.png", "task.retry", "history.undo", "history.redo" }) |candidate|
-        if (std.mem.eql(u8, name, candidate)) return true;
-    return false;
+    return commands.isManaged(name);
 }
 
 pub fn createsNode(name: []const u8) bool {
-    inline for (.{ "editor.invert.add", "editor.over.add", "editor.resize.add", "editor.image.open", "editor.asset.insert" }) |candidate|
-        if (std.mem.eql(u8, name, candidate)) return true;
-    return false;
+    return commands.isNodeCreating(name);
 }
 
 test "document stamps include the Runtime incarnation and mutation sequence" {
