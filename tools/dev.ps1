@@ -23,6 +23,17 @@ if ($pythonwCommand) {
             if (Test-Path $candidate) { $pythonwPath = $candidate }
         }
     }
+    if (-not $pythonwPath) {
+        # uv also keeps managed interpreters under %APPDATA%\uv\python when
+        # uv.exe itself is unavailable. Prefer the newest recorded 3.x.
+        $uvPythonRoot = Join-Path $env:APPDATA 'uv\python'
+        $candidates = @(Get-ChildItem -LiteralPath $uvPythonRoot -Directory -Filter 'cpython-*' -ErrorAction SilentlyContinue |
+            Sort-Object { if ($_.Name -match '^cpython-(\d+\.\d+)') { [version]$Matches[1] } else { [version]'0.0' } } -Descending)
+        foreach ($candidate in $candidates) {
+            $pythonw = Join-Path $candidate.FullName 'pythonw.exe'
+            if (Test-Path -LiteralPath $pythonw) { $pythonwPath = $pythonw; break }
+        }
+    }
 }
 if (-not $pythonwPath) {
     throw 'Python 3 with pythonw.exe is required on PATH (or uv-managed Python 3.12).'

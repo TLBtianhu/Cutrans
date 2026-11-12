@@ -4,7 +4,7 @@
 
 ## 固定环境与恢复
 
-需要 Windows x64、Python 3（uv 托管的 3.12 或带 `pythonw.exe` 的解释器）和网络连接。克隆后先恢复固定版本的完整工具链与第三方二进制：
+需要 Windows x64、Python 3（uv 托管的 3.12 或带 `pythonw.exe` 的解释器）和网络连接。`tools/dev.ps1` 优先使用 PATH 上的 `pythonw.exe`；找不到时会尝试 `uv python find 3.12`，再尝试 uv 的 `%APPDATA%\uv\python` 托管解释器，因此已有的终端或应用进程不因 PATH 快照过旧而无法运行隐藏入口。克隆后先恢复固定版本的完整工具链与第三方二进制：
 
 ```powershell
 git clone -c core.longpaths=true https://github.com/TLBtianhu/Cutrans.git
