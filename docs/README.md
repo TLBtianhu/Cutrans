@@ -20,6 +20,7 @@
 
 - [项目记忆](../MEMORY.md)：宪法、主题索引和最新实施记录。
 - [现役状态](memory/current.md)：当前实现、原型限额和未完成范围。
+- [参照系：FilmCraft／EffectCraft](memory/2026-11-12-artcraft-reference.md)：两者现状、架构要点、与 Cutrans 的对齐和差异以及学习路线（调研，未实施）。
 - [容量与回收（窄版）](memory/2026-11-12-capacity-reclaim.md)：`library.remove`、授权自动释放、容量错误显式化；已在本机编译并验证（DLL 命令入口与单元测试），Host/Shell 端到端与 GUI 按钮未覆盖。
 - [审计结论与进度检查点](memory/2026-11-12-audit-checkpoint.md)：全仓审计的 P0/P1/P2 清单、已修/未修、复现命令与接续顺序。
 - [评审交接与接续顺序](memory/2026-11-12-review-handoff.md)：审计复核修正、威胁模型校正、文档模型与插件两项新发现，以及商定的接续顺序。

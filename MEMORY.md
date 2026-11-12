@@ -69,6 +69,8 @@
 
 ## 最新实施记录
 
+- [2026-11-12 参照系：FilmCraft／EffectCraft 现状与对齐方案（调研，未实施）](docs/memory/2026-11-12-artcraft-reference.md)：用户决定以两者最新版本为参照系，学习并做理念的解耦与对齐（“Linux 对照 Unix”）。记录两者的分层、命令注册表、Tick 时间基准、`Arc` 结构共享快照撤销、效果定义即数据、CPU 参照答案与 GPU 对比测试；对照 Cutrans 列出对齐、借鉴与应保持的差异（声明式 comp 图，人与 AI 共写源码）；Claude 对整体用 Zig 重写持保留意见，建议学接口、复用零件。同页悬置两项待确认：v4 改为先定内存模型、`.cut` 后置；“三种生法已被推翻”在记忆中查无记录，待用户复述。只读了文档，未读源码。
+
 - [2026-11-12 容量与回收（窄版）：本机已验证](docs/memory/2026-11-12-capacity-reclaim.md)：（本机验证补记）代码一次编译、零修改；`build test` 退出 0，三个被标失败的测试二进制单独运行全部通过，四个新测试 OK；`verify-assets` 新增真实 DLL 上的 `library.remove` 断言并修正自 11-07 起失效的 catalog 格式断言；architecture／work-documents／local-sources／repository 均通过。另发现 `verify-resource-registration` 受管根边界在 HEAD 上就已回归（未修，见 `current.md`）。以下为编写时原文——`library.remove`（只删无活引用的条目与空文件夹，终态归档作业不阻止，磁盘字节留作孤儿，ID 不复用，清理该资源的工作回执以免冷恢复失败）、最后引用删除时自动释放持久来源授权、库／授权槽满统一返回 `queue_full`（UI 显示 `ResourceCapacityReached`）、四个新测试。云端 Linux VM 无法运行 `tools/dev.ps1`，**全部未编译**、工作区未提交；由本机 Windows Claude Code 会话接手验证。**新会话先读这一页，再读评审交接。**
 
 - [2026-11-12 评审交接：审计复核、威胁模型校正与接续顺序](docs/memory/2026-11-12-review-handoff.md)：对审计检查点的四处修正（#9 表述、冲突的下一步清单、`current.md:141` 残留、`runtime.md` ABI/重连漂移）；P0 #1–#3 改判为同用户完整性而非提权，管道抢注归多用户未验收；新增发现“文档模型是格式死路”和“一切皆插件零实现”；商定顺序为容量回收（窄版）→ vne 测试根 → v4 格式 ADR → D 注册表 → 两项小修（两处调整已于后续会话由用户确认）。评审本身只读；其后已按第五节刷新 `current.md`、审计检查点与 `runtime.md`。**新会话先读审计检查点，再读这一页；两者冲突以本页为准。**
