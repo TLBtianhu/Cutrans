@@ -1,4 +1,8 @@
-# 2026-11-12 未决请求：停止等待入口
+# 2026-11-12 未决请求：停止等待与跨 Shell 标记
+
+## 状态
+
+Host 重启与 Shell 重启两段都已闭环：旧 epoch 明确清空且不重复提交，标记让下一个 Shell 继续提示“可能已执行”，确认后清除且不重放。真实 Host + 隐藏 Shell 的 `verify-unknown-result` 覆盖两段；编辑器的“已核对，清除提示”按钮仍只有单元测试，没有真实点击验收。产品发行（安装、真实 GUI/IME、真实媒体）仍未闭环。
 
 ## 背景
 
@@ -30,7 +34,15 @@
   - 随后新 identity 的显式编辑成功，打印 `CUTRANS_UNKNOWN_RECOVERED`；
   - 同一数据的普通隐藏桌面场景另行跑通；
   - 第二个 Shell 在 pending 时直接退出，标记保留；新数据根上的下一个 Shell 打印 `CUTRANS_UNKNOWN_HISTORICAL` 并完成普通桌面场景。
+- `verify-repository`：退出 0，`developer-43cf8765eff3/`（最终文档树）。
 - 没有 ABI/协议字节变化；没有真实 GUI/IME 或安装验收。
+
+## 提交
+
+- `560868f9`：停止等待入口与单元测试。
+- `ad8af954`：`verify-unknown-result`，真实 Host 丢回复 + 重启闭环。
+- `1e82ecc1`：`data/shell/pending-unknown.txt` 跨 Shell 标记与恢复提示。
+- 已推送 `origin/master`，远端与本地一致；工作区干净。
 
 ## 边界
 
