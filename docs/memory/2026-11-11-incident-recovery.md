@@ -18,6 +18,7 @@
 2. 重连验证存在停机窗口竞态：原脚本写完 `reconnect.host-lost` 后 0.5 秒即重启 Host，Shell 可能在停机窗口之外才被调度，导致 `task.list` 在 Host 恢复后才执行并触发 `UnknownCommandWasRetried`。改为轮询 Shell 的 `CUTRANS_COMMAND_UNKNOWN`（上限 60 秒；Host 停机时 RPC 超时可能需十余秒才给出结论）后再重启 Host，使“停机期间普通命令失败且不重试”确定性成立。
 3. 补记重连 v2 语义：`vm_client.pump` 在镜像刷新失败时调用 `maybeReconnect`；失败进入 30 次 pump 冷却并显示“Host 不可用，等待重新连接”；`CUTRANS_RECONNECT_AUTO` 由标记文件驱动隐藏演示；停机期间只有 `allowedWhileStale` 白名单命令可尝试，未受管命令返回 `not_ready`，不自动重放。
 4. Python 工具链：Python 3.11 安装目录已不存在（`py -0p` 仍列出该路径，属于注册表残留），`uv.exe` 不在 PATH，`tools/dev.ps1` 找不到 `pythonw.exe`，隐藏 runner 无法启动。已将 uv 托管的 CPython 3.12.13 目录加入用户 PATH 首项；新启动的进程可直接使用隐藏入口。当前 DSH 会话仍继承旧环境，需重启 DSH 才会自动生效。
+5. GitHub 认证：全局 `credential.https://github.com.helper` 指向已被删除的 WinGet `GitHub.cli` 包内 `gh.exe`，推送因此失败。备份用户 `.gitconfig` 为 `.gitconfig.bak-20261111` 后移除该失效键，回落到系统 `credential.helper=manager`；默认配置下推送恢复。
 
 ## 实际验证（2026-11-11 深夜）
 
@@ -29,8 +30,8 @@
 
 ## 快照
 
-- 本次把 2026-11-08 之后的全部工作区变更、NanoUI v0.14 同步与本记录提交为 master 快照，并推送 `origin/master`；未改写历史、未发布 Release、未改安装或运行数据。
-- 提交后工作区除忽略项外应为干净状态。
+- 提交 `0fd618fd`（`feat: snapshot creation slices through 2026-11-11`）包含 2026-11-08 之后的全部工作区变更、NanoUI v0.14 同步与本记录；已推送 `origin/master`，远端 `refs/heads/master` 与本地一致，工作区除忽略项外为干净状态。
+- 未改写历史、未发布 Release、未改安装或运行数据。
 
 ## 边界与后续
 
