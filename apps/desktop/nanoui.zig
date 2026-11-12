@@ -123,7 +123,20 @@ fn unknownResultDemo(state: *model.State) !void {
     std.debug.print("CUTRANS_UNKNOWN_DEMO_DONE\n", .{});
 }
 
+fn unknownResultExitDemo(state: *model.State) !void {
+    const before = state.ctx.document.count;
+    const pending = state.ctx.command.dispatch(.{ .name = "editor.invert.add" });
+    if (pending.code != .not_ready or !vm_client.hasPending()) return error.UnknownResultPendingMissing;
+    if (state.ctx.document.count != before + 1) return error.UnknownResultCommitNotObserved;
+    std.debug.print("CUTRANS_UNKNOWN_PENDING nodes_before={d} nodes_after={d}\n", .{ before, state.ctx.document.count });
+    std.debug.print("CUTRANS_UNKNOWN_EXIT_PENDING\n", .{});
+}
+
 fn verify(state: *model.State, config: *const abi.ShellConfig) !void {
+    if (std.c.getenv("CUTRANS_UNKNOWN_RESULT_EXIT") != null) {
+        try unknownResultExitDemo(state);
+        return;
+    }
     if (std.c.getenv("CUTRANS_UNKNOWN_RESULT_DEMO") != null) {
         try unknownResultDemo(state);
         return;

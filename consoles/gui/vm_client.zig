@@ -68,6 +68,7 @@ const Client = struct {
     stamp: ?workspace.Stamp = null,
     pending: ?Pending = null,
     last_outcome: ?workspace.Outcome = null,
+    historical_unknown: bool = false,
     initialized: bool = false,
     mirror_errors: [4]?anyerror = @splat(error.MirrorNotInitialized),
 };
@@ -246,6 +247,66 @@ fn pendingMessage(ctx: *RuntimeContext) void {
     ctx.status.set("修改结果尚未确认，正在核对；暂不能提交新修改");
 }
 
+const pending_marker = "shell/pending-unknown.txt";
+const pending_marker_temp = "shell/pending-unknown.tmp";
+
+fn markerPath(ctx: *RuntimeContext, relative: []const u8) ![]u8 {
+    return ctx.paths.dataPath(ctx.allocator, relative);
+}
+
+fn writePendingMarker(ctx: *RuntimeContext, pending: Pending) void {
+    const io_value = ctx.io orelse return;
+    const path = markerPath(ctx, pending_marker) catch return;
+    defer ctx.allocator.free(path);
+    if (std.fs.path.dirname(path)) |directory| std.Io.Dir.cwd().createDirPath(io_value, directory) catch return;
+    var buffer: [512]u8 = undefined;
+    const text = std.fmt.bufPrint(&buffer, "cutrans-shell-pending/1\nname={s}\nsequence={d}\n", .{ pending.name, pending.sequence }) catch return;
+    const temp = markerPath(ctx, pending_marker_temp) catch return;
+    defer ctx.allocator.free(temp);
+    std.Io.Dir.cwd().writeFile(io_value, .{ .sub_path = temp, .data = text }) catch return;
+    std.Io.Dir.cwd().rename(temp, std.Io.Dir.cwd(), path, io_value) catch {
+        std.Io.Dir.cwd().deleteFile(io_value, temp) catch {};
+    };
+}
+
+fn clearPendingMarker(ctx: *RuntimeContext) void {
+    const io_value = ctx.io orelse return;
+    const path = markerPath(ctx, pending_marker) catch return;
+    defer ctx.allocator.free(path);
+    std.Io.Dir.cwd().deleteFile(io_value, path) catch {};
+    const temp = markerPath(ctx, pending_marker_temp) catch return;
+    defer ctx.allocator.free(temp);
+    std.Io.Dir.cwd().deleteFile(io_value, temp) catch {};
+}
+
+/// Restore the warning that a previous Shell incarnation left an unresolved
+/// managed request. The marker is informational: it is never replayed.
+pub fn recoverPendingMarker(ctx: *RuntimeContext) void {
+    const io_value = ctx.io orelse return;
+    const path = markerPath(ctx, pending_marker) catch return;
+    defer ctx.allocator.free(path);
+    const text = std.Io.Dir.cwd().readFileAlloc(io_value, path, ctx.allocator, .limited(512)) catch return;
+    defer ctx.allocator.free(text);
+    if (!std.mem.startsWith(u8, text, "cutrans-shell-pending/1")) {
+        clearPendingMarker(ctx);
+        return;
+    }
+    client.historical_unknown = true;
+    std.debug.print("CUTRANS_UNKNOWN_HISTORICAL\n", .{});
+    ctx.status.set("上次会话有未确认的修改，可能已执行；请核对文档后清除提示");
+}
+
+pub fn hasHistoricalUnknown() bool {
+    return client.historical_unknown;
+}
+
+pub fn acknowledgeHistoricalUnknown(ctx: *RuntimeContext) void {
+    if (!client.historical_unknown) return;
+    client.historical_unknown = false;
+    clearPendingMarker(ctx);
+    ctx.status.set("已清除上次未确认提示");
+}
+
 fn submitPending(ctx: *RuntimeContext) command.Result {
     const pending = client.pending orelse return .failure(.invalid_state);
     const identity = client.identity.?;
@@ -276,6 +337,14 @@ fn submitPending(ctx: *RuntimeContext) command.Result {
     pending.deinit();
     client.pending = null;
     client.last_outcome = outcome;
+    const settled_unknown = outcome.status == workspace.Status.wrong_epoch or
+        outcome.status == workspace.Status.bad_sequence or outcome.status == workspace.Status.receipt_expired;
+    if (settled_unknown) {
+        // Keep the marker so a restarted Shell still warns about this request.
+        client.historical_unknown = true;
+    } else {
+        clearPendingMarker(ctx);
+    }
     const early_refusal = outcome.disposition == @backingInt(workspace.Disposition.rejected) and
         (outcome.status == abi.Status.invalid_arguments or outcome.status == workspace.Status.client_limit);
     if (outcome.status == workspace.Status.wrong_epoch or outcome.status == workspace.Status.bad_sequence or outcome.status == workspace.Status.receipt_expired) {
@@ -311,6 +380,8 @@ fn beginPending(ctx: *RuntimeContext, c: command.Command, expected: workspace.St
     errdefer ctx.allocator.free(name);
     const arg = if (c.arg) |value| try ctx.allocator.dupe(u8, value) else null;
     client.pending = .{ .allocator = ctx.allocator, .name = name, .arg = arg, .expected = expected, .sequence = client.next_sequence };
+    client.historical_unknown = false;
+    writePendingMarker(ctx, client.pending.?);
 }
 
 fn forwardManaged(ctx: *RuntimeContext, c: command.Command) command.Result {
@@ -344,6 +415,8 @@ pub fn abandonPending(ctx: *RuntimeContext) void {
     client.identity = null;
     client.next_sequence = 1;
     client.sequence_exhausted = false;
+    client.historical_unknown = false;
+    clearPendingMarker(ctx);
     refreshMirrors(ctx) catch {
         ctx.status.set("已停止等待；Host 仍不可用，稍后刷新文档镜像");
         return;
@@ -1185,6 +1258,37 @@ test "stopping without a pending request keeps the client identity" {
     try std.testing.expectEqual(@as(u64, 101), client.identity.?.hi);
     try std.testing.expectEqual(@as(u64, 1), client.next_sequence);
     try std.testing.expectEqual(@as(usize, 0), remote.submit_calls);
+}
+
+test "pending marker survives a shell restart until acknowledged" {
+    const ctx = try testContext();
+    defer freeTestContext(ctx);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(data_root);
+    ctx.paths = try vne.paths.Paths.fromDirs(std.testing.allocator, .portable, "C:/cutrans-test-resource", data_root);
+    var remote: MockShell = .{ .lose_next_response = true };
+    const api = remote.api();
+    try initWithIdentity(&api, .{ .hi = 101, .lo = 202 });
+    try refreshMirrors(ctx);
+    _ = forward(.{ .name = "editor.gain.set", .arg = "c1 0.25" }, ctx);
+    try std.testing.expect(hasPending());
+    const marker = try ctx.paths.dataPath(std.testing.allocator, "shell/pending-unknown.txt");
+    defer std.testing.allocator.free(marker);
+    try std.Io.Dir.cwd().access(std.testing.io, marker, .{});
+    // Simulate a Shell exit without resolving: the next incarnation must warn
+    // but must not replay the old request.
+    deinit();
+    var next_remote: MockShell = .{};
+    const next_api = next_remote.api();
+    try initWithIdentity(&next_api, .{ .hi = 303, .lo = 404 });
+    try refreshMirrors(ctx);
+    recoverPendingMarker(ctx);
+    try std.testing.expect(hasHistoricalUnknown());
+    acknowledgeHistoricalUnknown(ctx);
+    try std.testing.expect(!hasHistoricalUnknown());
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, marker, .{}));
 }
 
 test "queued stale intent keeps its original expected stamp and receives a refusal" {

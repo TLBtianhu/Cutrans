@@ -64,6 +64,7 @@ pub const State = struct {
         try vm_client.init(api);
         errdefer vm_client.deinit();
         try vm_client.register(&self.ctx);
+        vm_client.recoverPendingMarker(&self.ctx);
         self.session = try @import("vne").environment_session.establish(api);
         self.editor = editor_view.State.init(&self.ctx);
         errdefer self.editor.deinit();

@@ -111,6 +111,41 @@ def main() -> None:
         invoke(console, "stop", data, "portable")
         stopped = True
 
+        # A Shell that exits while the request is unresolved must leave a marker
+        # for the next Shell, without replaying anything. The marker is copied
+        # to a fresh data root so the ordinary desktop scenario still starts
+        # from its expected document shape.
+        marker_data = root / "marker-data"
+        os.environ["CUTRANS_TEST_DROP_WORKSPACE_REPLY"] = "1"
+        try:
+            invoke(console, "start", marker_data, "portable")
+        finally:
+            os.environ.pop("CUTRANS_TEST_DROP_WORKSPACE_REPLY", None)
+        stopped = False
+        process = start_shell(console, marker_data, root / "marker-exit.log", {"CUTRANS_UNKNOWN_RESULT_EXIT": "1"})
+        wait_for(root / "marker-exit.log", "CUTRANS_UNKNOWN_EXIT_PENDING", process)
+        require(process.wait(timeout=120) == 0, "the Shell did not exit cleanly with an unresolved request")
+        marker = marker_data / "shell" / "pending-unknown.txt"
+        require(marker.is_file(), "the unresolved request did not leave a marker")
+        marker_bytes = marker.read_bytes()
+        invoke(console, "stop", marker_data, "portable")
+        stopped = True
+
+        fresh_data = root / "marker-fresh"
+        invoke(console, "start", fresh_data, "portable")
+        stopped = False
+        (fresh_data / "shell").mkdir(parents=True, exist_ok=True)
+        (fresh_data / "shell" / "pending-unknown.txt").write_bytes(marker_bytes)
+        marker_log = root / "marker-next.log"
+        process = start_shell(console, fresh_data, marker_log, {})
+        require(process.wait(timeout=120) == 0, "the desktop after the marker failed")
+        marker_text = marker_log.read_text(encoding="utf-8")
+        require("CUTRANS_UNKNOWN_HISTORICAL" in marker_text, "the next Shell did not warn about the marker")
+        require("CUTRANS_NANOUI_DESKTOP_OK" in marker_text, "the desktop after the marker lost its normal markers")
+        evidence["checks"].append("pending_marker_warns_a_new_shell_and_never_replays")
+        invoke(console, "stop", fresh_data, "portable")
+        stopped = True
+
         evidence["passed"] = True
         print("CUTRANS_UNKNOWN_VERIFY_OK pending=1 cleared=1 recovered=1 nodes=1 desktop=1 hidden=1")
     except BaseException as error:
