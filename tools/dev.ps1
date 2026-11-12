@@ -8,9 +8,24 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+$pythonwPath = $null
 $pythonwCommand = Get-Command pythonw.exe -ErrorAction SilentlyContinue
-if (-not $pythonwCommand) {
-    throw 'Python 3 with pythonw.exe is required on PATH.'
+if ($pythonwCommand) {
+    $pythonwPath = $pythonwCommand.Source
+} else {
+    # uv-managed Python keeps pythonw.exe beside the interpreter but does not
+    # put it on PATH; find the interpreter without changing global PATH.
+    $uv = Get-Command uv.exe -ErrorAction SilentlyContinue
+    if ($uv) {
+        $found = & $uv.Source python find 3.12 2>$null
+        if ($LASTEXITCODE -eq 0 -and $found) {
+            $candidate = Join-Path (Split-Path ($found | Select-Object -First 1)) 'pythonw.exe'
+            if (Test-Path $candidate) { $pythonwPath = $candidate }
+        }
+    }
+}
+if (-not $pythonwPath) {
+    throw 'Python 3 with pythonw.exe is required on PATH (or uv-managed Python 3.12).'
 }
 $caseId = [Guid]::NewGuid().ToString('N').Substring(0, 12)
 $request = @{ action = $Action.ToLowerInvariant(); arguments = @($Arguments) } | ConvertTo-Json -Compress
@@ -21,7 +36,7 @@ $logPath = Join-Path $repositoryRoot "scratch\verification\developer-$caseId\run
 # Base64 and the generated case id contain no command-line quoting characters.
 # Windows filenames cannot contain a double quote; never pass this through cmd.
 $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-$startInfo.FileName = $pythonwCommand.Source
+$startInfo.FileName = $pythonwPath
 $startInfo.Arguments = '-B "' + $runnerPath + '" --case ' + $caseId + ' --request ' + $payload
 $startInfo.WorkingDirectory = $repositoryRoot
 $startInfo.UseShellExecute = $false

@@ -82,7 +82,7 @@ const NullClock = struct {
 };
 
 test "clock gated playback presents only materialized frames and finishes" {
-    var doc = @import("documents.zig").Document.initDefault();
+    var doc = @import("vne").documents.Document.initDefault();
     doc.width = 1;
     doc.height = 1;
     var stream = stream_mod.Stream.init(&doc, 2);
@@ -106,7 +106,7 @@ test "clock gated playback presents only materialized frames and finishes" {
 }
 
 test "skip underflow never produces an unmaterialized frame" {
-    var doc = @import("documents.zig").Document.initDefault();
+    var doc = @import("vne").documents.Document.initDefault();
     doc.width = 1;
     doc.height = 1;
     var stream = stream_mod.Stream.init(&doc, 1);

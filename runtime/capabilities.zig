@@ -4,7 +4,7 @@
 //! implemented 由 render/image 的 adapter_ids 计算;未知能力不是 ready。
 
 const std = @import("std");
-const documents = @import("documents.zig");
+const documents = @import("vne").documents;
 const render = @import("render.zig");
 const image = @import("image.zig");
 

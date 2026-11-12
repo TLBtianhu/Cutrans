@@ -6,6 +6,7 @@ const launch = @import("launch.zig");
 const product = @import("product.zig");
 
 pub const context_filename = "cutrans-context.json";
+const context_blob = @import("context_blob");
 pub const Channel = product.Channel;
 const Services = struct { updates: bool, accounts: bool, telemetry: bool };
 const Record = struct {
@@ -220,6 +221,10 @@ pub const Context = struct {
     }
 };
 
+fn parseRecord(allocator: std.mem.Allocator, text: []const u8) !std.json.Parsed(Record) {
+    return std.json.parseFromSlice(Record, allocator, text, .{ .allocate = .alloc_always }) catch return error.InvalidRunContext;
+}
+
 fn readRecord(allocator: std.mem.Allocator, io: std.Io, directory: []const u8) !?std.json.Parsed(Record) {
     const file = try std.fs.path.join(allocator, &.{ directory, context_filename });
     defer allocator.free(file);
@@ -228,7 +233,20 @@ fn readRecord(allocator: std.mem.Allocator, io: std.Io, directory: []const u8) !
         return err;
     };
     defer allocator.free(text);
-    return std.json.parseFromSlice(Record, allocator, text, .{ .allocate = .alloc_always }) catch return error.InvalidRunContext;
+    return try parseRecord(allocator, text);
+}
+
+/// The embedded context a shape may use when its external file is missing.
+/// `app` is the installed shape and gets the installed context; a portable
+/// directory gets the portable one. Development `bin` and sibling `shells/*`
+/// still need their real build context.
+fn embeddedContextText(exe_dir: []const u8) ?[]const u8 {
+    const base = std.fs.path.basename(exe_dir);
+    if (std.mem.eql(u8, base, "app")) return context_blob.installed;
+    if (std.mem.eql(u8, base, "bin")) return null;
+    const parent = std.fs.path.dirname(exe_dir) orelse return context_blob.portable;
+    if (std.mem.eql(u8, std.fs.path.basename(parent), "shells")) return null;
+    return context_blob.portable;
 }
 
 pub fn load(allocator: std.mem.Allocator, io: std.Io, exe_dir: []const u8) !Context {
@@ -249,6 +267,13 @@ pub fn load(allocator: std.mem.Allocator, io: std.Io, exe_dir: []const u8) !Cont
             allocator.free(location);
             location = next;
             parsed = try readRecord(allocator, io, location);
+        }
+    }
+    if (parsed == null) {
+        if (embeddedContextText(canonical_exe)) |text| {
+            parsed = parseRecord(allocator, text) catch return error.InvalidEmbeddedRunContext;
+            allocator.free(location);
+            location = try allocator.dupe(u8, canonical_exe);
         }
     }
     const record = parsed orelse return error.MissingRunContext;
@@ -278,6 +303,30 @@ pub fn load(allocator: std.mem.Allocator, io: std.Io, exe_dir: []const u8) !Cont
         try ensureSeparate(allocator, io, build_root, dev_data.?);
     } else if (value.development_data_root.len != 0) return error.UnexpectedDevelopmentDataRoot;
     return .{ .allocator = allocator, .form = value.form, .channel = value.channel, .executable_dir = canonical_exe, .product_root = canonical_root, .development_data_root = dev_data };
+}
+
+test "embedded contexts distinguish portable, installed and development shapes" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+
+    const installed = try std.fs.path.join(std.testing.allocator, &.{ root, "app" });
+    defer std.testing.allocator.free(installed);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, installed);
+    var installed_ctx = try load(std.testing.allocator, std.testing.io, installed);
+    defer installed_ctx.deinit();
+    try std.testing.expectEqual(launch.Mode.installed, installed_ctx.form);
+    try std.testing.expectEqualStrings(root, installed_ctx.product_root);
+
+    const development = try std.fs.path.join(std.testing.allocator, &.{ root, "bin" });
+    defer std.testing.allocator.free(development);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, development);
+    try std.testing.expectError(error.MissingRunContext, load(std.testing.allocator, std.testing.io, development));
+
+    var portable = try load(std.testing.allocator, std.testing.io, root);
+    defer portable.deinit();
+    try std.testing.expectEqual(launch.Mode.portable, portable.form);
 }
 
 test "canonical data aliases agree and ancestor overlap is rejected before IO" {

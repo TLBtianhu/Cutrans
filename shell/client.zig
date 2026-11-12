@@ -11,6 +11,8 @@ const resource_wire = protocol.resource_wire;
 const Client = struct {
     allocator: std.mem.Allocator,
     endpoint: []u8,
+    mode: @import("vne").launch.Mode = .development,
+    preview_epoch: ?[2]u64 = null,
 };
 
 var client: Client = undefined;
@@ -30,7 +32,7 @@ pub fn init(allocator: std.mem.Allocator, data_dir: []const u8, mode: @import("v
     const endpoint = try host_protocol.endpoint(allocator, data_dir);
     errdefer allocator.free(endpoint);
     try verifyHost(allocator, endpoint, mode);
-    client = .{ .allocator = allocator, .endpoint = endpoint };
+    client = .{ .allocator = allocator, .endpoint = endpoint, .mode = mode, .preview_epoch = null };
     initialized = true;
 }
 
@@ -38,6 +40,15 @@ pub fn deinit() void {
     if (initialized) client.allocator.free(client.endpoint);
     client = undefined;
     initialized = false;
+}
+
+/// Revalidate the same Host endpoint after a restart. The Shell API table and
+/// function pointers stay stable; only incarnation-local preview/workspace
+/// state must be re-established by the caller.
+pub fn reconnect() !void {
+    if (!initialized) return error.ShellNotInitialized;
+    try verifyHost(client.allocator, client.endpoint, client.mode);
+    client.preview_epoch = null;
 }
 
 const Reply = struct {
@@ -109,7 +120,7 @@ fn commandResult(context: ?*anyopaque, name: abi.ByteSlice, arg: abi.ByteSlice, 
     std.mem.writeInt(u32, payload[4..8], @intCast(arg_len), .little);
     @memcpy(payload[8 .. 8 + command_name.?.len], command_name.?);
     if (command_arg) |value| @memcpy(payload[8 + command_name.?.len ..], value);
-    var reply = call(.command_result, 0, payload) catch return abi.Status.failed;
+    var reply = call(.command_result, 0, payload) catch return abi.Status.not_ready;
     defer reply.deinit();
     if (out_task_id) |out| out.* = reply.value;
     return reply.status;
@@ -282,6 +293,33 @@ fn workSubmit(context: ?*anyopaque, request: ?*const resource.WorkRequest, out: 
     return abi.Status.ok;
 }
 
+fn localBytes(kind: protocol.Kind, payload: []const u8, buffer: ?[*]u8, capacity: usize, out_len: ?*usize) i32 {
+    const required = out_len orelse return abi.Status.invalid_arguments;
+    required.* = 0;
+    var reply = call(kind, 0, payload) catch return abi.Status.failed;
+    defer reply.deinit();
+    if (reply.status != abi.Status.ok or reply.value != 0) return reply.status;
+    return copyBytes(reply.payload, buffer, capacity, required);
+}
+
+fn sourceBrowse(context: ?*anyopaque, path: resource.Bytes, cursor: u64, limit: u32, buffer: ?[*]u8, capacity: usize, out_len: ?*usize) callconv(.c) i32 {
+    _ = context;
+    if (!initialized) return abi.Status.invalid_state;
+    const text = read(.{ .ptr = path.ptr, .len = path.len }, true) catch return abi.Status.invalid_arguments;
+    const payload = protocol.source_wire.encodeBrowse(client.allocator, .{ .path = text.?, .cursor = cursor, .limit = limit }) catch return abi.Status.invalid_arguments;
+    defer client.allocator.free(payload);
+    return localBytes(.source_browse, payload, buffer, capacity, out_len);
+}
+
+fn sourceReadLocal(context: ?*anyopaque, path: resource.Bytes, buffer: ?[*]u8, capacity: usize, out_len: ?*usize) callconv(.c) i32 {
+    _ = context;
+    if (!initialized) return abi.Status.invalid_state;
+    const text = read(.{ .ptr = path.ptr, .len = path.len }, true) catch return abi.Status.invalid_arguments;
+    const payload = protocol.source_wire.encodeRead(client.allocator, text.?) catch return abi.Status.invalid_arguments;
+    defer client.allocator.free(payload);
+    return localBytes(.local_read, payload, buffer, capacity, out_len);
+}
+
 fn resourceApi(context: ?*anyopaque, out: ?*resource.Api) callconv(.c) i32 {
     _ = context;
     if (!initialized) return abi.Status.invalid_state;
@@ -293,6 +331,8 @@ fn resourceApi(context: ?*anyopaque, out: ?*resource.Api) callconv(.c) i32 {
         .submit = resourceSubmit,
         .work_snapshot = workSnapshot,
         .work_submit = workSubmit,
+        .source_browse = sourceBrowse,
+        .source_read = sourceReadLocal,
     };
     return abi.Status.ok;
 }
@@ -423,7 +463,7 @@ fn assetRead(context: ?*anyopaque, id: u64, buffer: ?[*]u8, buffer_len: usize, o
 
 fn assetOpenExternal(context: ?*anyopaque, path: abi.ByteSlice, out_asset_id: ?*u64) callconv(.c) i32 {
     _ = context;
-    const external_path = read(path, true) catch return abi.Status.invalid_arguments;
+    const external_path = read(.{ .ptr = path.ptr, .len = path.len }, true) catch return abi.Status.invalid_arguments;
     const out = out_asset_id orelse return abi.Status.invalid_arguments;
     var reply = call(.asset_open_external, 0, external_path.?) catch return abi.Status.failed;
     defer reply.deinit();
@@ -466,6 +506,56 @@ pub fn commit(identity: @import("vne").runtime_lock.Identity, allow_migration: b
     return selectIdentity(.shell_commit, identity, allow_migration);
 }
 
+pub const ExitHooks = struct {
+    identity: @import("vne").runtime_lock.Identity,
+    allow_migration: bool,
+    committed: bool = false,
+    host_stopped: bool = false,
+
+    pub fn commitSelection(self: *ExitHooks) !void {
+        if (self.committed) return;
+        try commit(self.identity, self.allow_migration);
+        self.committed = true;
+    }
+
+    fn action(_: *ExitHooks, kind: host_protocol.Action) !host_protocol.Snapshot {
+        if (!initialized) return error.ShellNotInitialized;
+        var encoded: [host_protocol.max_message]u8 = undefined;
+        const request = try host_protocol.writeAction(&encoded, kind);
+        var response: [host_protocol.max_message]u8 = undefined;
+        const count = try control.request(client.allocator, client.endpoint, request, &response);
+        const snapshot = try host_protocol.parseSnapshot(response[0..count]);
+        if (snapshot.mode != client.mode or snapshot.abi_version != abi.version) return error.HostAbiMismatch;
+        return snapshot;
+    }
+
+    pub fn prepareStop(self: *ExitHooks) !host_protocol.Snapshot {
+        const snapshot = try self.action(.prepare_stop);
+        if (snapshot.state != .stopping) return error.HostNotReady;
+        return snapshot;
+    }
+
+    pub fn cancelJobs(self: *ExitHooks) !host_protocol.Snapshot {
+        const snapshot = try self.action(.cancel_jobs);
+        if (snapshot.state != .stopping) return error.HostNotReady;
+        return snapshot;
+    }
+
+    pub fn resume_work(self: *ExitHooks) !host_protocol.Snapshot {
+        const snapshot = try self.action(.resume_work);
+        if (snapshot.state != .running) return error.HostResumeFailed;
+        return snapshot;
+    }
+
+    pub fn stop(self: *ExitHooks) !host_protocol.Snapshot {
+        try self.commitSelection();
+        const snapshot = try self.action(.stop);
+        if (snapshot.state != .stopped) return error.HostStopFailed;
+        self.host_stopped = true;
+        return snapshot;
+    }
+};
+
 pub fn inputBegin(path: []const u8) !void {
     var reply = try call(.input_begin, 0, path);
     defer reply.deinit();
@@ -500,6 +590,48 @@ pub fn jobsRead(allocator: std.mem.Allocator, after_id: u64) ![]u8 {
     return allocator.dupe(u8, reply.payload);
 }
 
+fn previewPayload(buffer: *[24]u8, expected: u64) []const u8 {
+    std.mem.writeInt(u64, buffer[0..8], expected, .little);
+    if (client.preview_epoch) |epoch| {
+        std.mem.writeInt(u64, buffer[8..16], epoch[0], .little);
+        std.mem.writeInt(u64, buffer[16..24], epoch[1], .little);
+        return buffer[0..24];
+    }
+    return buffer[0..8];
+}
+
+fn previewInfo(_: ?*anyopaque, expected: u64, out_info: ?*abi.PreviewInfo) callconv(.c) i32 {
+    if (!initialized) return abi.Status.not_ready;
+    const out = out_info orelse return abi.Status.invalid_arguments;
+    var payload: [24]u8 = undefined;
+    var reply = call(.preview_info, 0, previewPayload(&payload, expected)) catch return abi.Status.failed;
+    if (reply.status == abi.Status.invalid_state and client.preview_epoch != null) {
+        reply.deinit();
+        client.preview_epoch = null;
+        std.debug.print("CUTRANS_PREVIEW_EPOCH_RESET\n", .{});
+        reply = call(.preview_info, 0, previewPayload(&payload, expected)) catch return abi.Status.failed;
+    }
+    defer reply.deinit();
+    const status = copyFixed(abi.PreviewInfo, reply, out);
+    if (status == abi.Status.ok) client.preview_epoch = .{ out.epoch_hi, out.epoch_lo };
+    return status;
+}
+
+fn previewRead(_: ?*anyopaque, expected: u64, buffer: ?[*]u8, capacity: usize, out_len: ?*usize) callconv(.c) i32 {
+    if (!initialized) return abi.Status.not_ready;
+    var payload: [24]u8 = undefined;
+    var reply = call(.preview_read, 0, previewPayload(&payload, expected)) catch return abi.Status.failed;
+    if (reply.status == abi.Status.invalid_state and client.preview_epoch != null) {
+        reply.deinit();
+        client.preview_epoch = null;
+        std.debug.print("CUTRANS_PREVIEW_EPOCH_RESET\n", .{});
+        reply = call(.preview_read, 0, previewPayload(&payload, expected)) catch return abi.Status.failed;
+    }
+    defer reply.deinit();
+    if (reply.status != abi.Status.ok) return reply.status;
+    return copyBytes(reply.payload, buffer, capacity, out_len);
+}
+
 pub fn api() abi.ShellApi {
     return .{
         .struct_size = @sizeOf(abi.ShellApi),
@@ -524,6 +656,8 @@ pub fn api() abi.ShellApi {
         .workspace_api = workspaceApi,
         .source_read = sourceRead,
         .resource_api = resourceApi,
+        .preview_info = previewInfo,
+        .preview_read = previewRead,
     };
 }
 

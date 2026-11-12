@@ -26,6 +26,8 @@ const Session = struct {
     draft_revision: u64,
     generation: u64 = 0,
     persisted_generation: u64 = 0,
+    last_edit_generation: u64 = 0,
+    last_edit_ns: i96 = 0,
     want_commit: bool = false,
     requires_protection: bool = false,
 
@@ -33,6 +35,10 @@ const Session = struct {
         return self.requires_protection or self.generation != self.persisted_generation;
     }
 };
+
+/// Draft autosave is idle-debounced: a keystroke changes `generation`, a later
+/// frame persists it, and `beforeClose`/Ctrl+S force an immediate flush.
+const save_debounce_ns: i96 = 400 * std.time.ns_per_ms;
 
 const OwnedSnapshot = struct {
     metadata: resource.WorkSnapshot,
@@ -280,12 +286,26 @@ pub const Model = struct {
         return result orelse error.WorkReceiptMissing;
     }
 
-    pub fn pump(self: *Model) !void {
+    pub fn pump(self: *Model, force: bool) !void {
         if (self.pending != null or self.paused) return;
         const session = if (self.editor) |*value| value else return;
         if (session.editor.isComposing()) return;
         if (session.needsDraft()) {
+            if (!force) {
+                if (self.io) |io| {
+                    const now = std.Io.Clock.Timestamp.now(io, .awake).raw.nanoseconds;
+                    // A new edit restarts the idle window. Later frames keep the
+                    // window alive without writing anything until it expires.
+                    if (session.last_edit_generation != session.generation) {
+                        session.last_edit_generation = session.generation;
+                        session.last_edit_ns = now;
+                        return;
+                    }
+                    if (now - session.last_edit_ns < save_debounce_ns) return;
+                }
+            }
             _ = try self.start(.save_draft, session.id, session.base_revision, session.draft_revision, "", session.editor.text(), session.generation);
+            session.last_edit_generation = session.generation;
         } else if (session.want_commit) {
             if (session.draft_revision == 0) {
                 session.want_commit = false;
@@ -295,21 +315,30 @@ pub const Model = struct {
         }
     }
 
+    /// The UI must schedule a timer frame while a draft is awaiting its idle
+    /// window, otherwise a user who stops typing would never persist it.
+    pub fn needsFrame(self: *const Model) bool {
+        if (self.paused) return false;
+        if (self.pending != null) return true;
+        const session = self.editor orelse return false;
+        if (session.editor.isComposing()) return false;
+        return session.needsDraft() or session.want_commit;
+    }
+
     pub fn requestSave(self: *Model) !void {
         self.paused = false;
         self.failure = null;
         if (self.editor) |*session| session.want_commit = true;
         if (self.pending != null) {
             _ = try self.sendPending();
-            return;
         }
-        try self.pump();
+        try self.pump(true);
     }
 
     pub fn beforeClose(self: *Model) bool {
         for (0..4) |_| {
             if (self.canLeave()) return true;
-            self.pump() catch return false;
+            self.pump(true) catch return false;
         }
         return self.canLeave();
     }
@@ -346,5 +375,6 @@ pub const Model = struct {
             ui.text(c, text, .{ .size = 12, .color = c.theme.muted });
         }
         ui.textf(c, .{ .size = 12, .color = c.theme.muted }, "{d} 字节 · Ctrl+S 提交 · 最多 1 MiB", .{session.editor.text().len});
+        if (self.needsFrame()) c.frameIn(0.05);
     }
 };

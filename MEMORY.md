@@ -65,7 +65,56 @@
 - [二十、VM Runtime 与 VNE 实施台账(2026-11-02)（分段 1）](docs/memory/21-implementation-01.md)
 - [二十、VM Runtime 与 VNE 实施台账(2026-11-02)（分段 2）](docs/memory/21-implementation-02.md)
 
+
 ## 最新实施记录
+
+- [2026-11-11 事故恢复与工作区快照](docs/memory/2026-11-11-incident-recovery.md)：本机清理事件丢失 DSH 会话正文（Cutrans 75 轮），仓库源文件幸存；核对发现 11-09～11-11 全部改动未提交。修复 `verify_reconnect.py` 语法错误与停机窗口竞态，补齐重连 v2 语义和 Python 隐藏入口；`build test`、`verify-payload`、`verify-reconnect`、`verify-repository` 通过；工作区已提交并推送 `origin/master`。
+
+- [2026-11-11 Host 重连 v1](docs/memory/2026-11-11-host-reconnect-v1.md)：Shell 增加 `reconnect()`，镜像读取失败后重新 verify Host 并重试一次；成功清空 preview epoch/identity/stamp，pending 请求保留不自动重放。普通命令仍不自动重试；`verify-reconnect` 已通过真实 Host 停止/重启 + 隐藏 Shell 自动检测、重连；pump 失败触发连接重建并有冷却窗口。
+
+- [2026-11-11 受管理 doc.save](docs/memory/2026-11-11-managed-save.md)：`doc.save` 纳入 `vne.workspace.manages`，复用 client identity/sequence/expected 与 receipt；丢回复重试同一请求可回放，不重复保存。没有新增 ABI/协议；receipt 仍只在单 Runtime 生命周期内有效。
+
+- [2026-11-11 Preview 验证与 RuntimeContext 修剪](docs/memory/2026-11-11-preview-verification-context-trim.md)：真实 Host + 隐藏 Shell 的 desktop verify 请求两帧、校验 generation/像素、短 buffer 和 stale fingerprint；PreviewInfo 携带 Runtime epoch/revision，新 Runtime 实例 epoch 必变；新增独立 `verify-preview`；Shell client 携带已知 epoch，Host 重启后旧 epoch 请求被拒绝并重试；RuntimeContext 移除仅 Shell 使用的 asset_view/library_view/playback_view。status/devices 仍有真实 Runtime 消费者，保留。
+
+- [2026-11-10 Shell 与 imaging 解耦](docs/memory/2026-11-10-shell-imaging-decoupling.md)：PNG 编解码移到共享 `imaging` 模块，`vm_client` 不再导入 runtime；sourceProvider 改为 Shell 本地类型，架构守卫增加 `vm_client` 文件级 runtime 禁入。`build test`、payload 通过。
+
+- [2026-11-10 Shell 自有投影上下文](docs/memory/2026-11-10-shell-owned-context.md)：桌面/编辑器/控制台改用 `vm_client.Context`，不再实例化 `RuntimeContext`；Shell 只持有命令、文档镜像、资源/库/播放/设备视图与路径。`build test`、payload 通过；`vm_client` 仍用 runtime.image/render 做资源预览与 source provider。
+
+- [2026-11-10 Preview ABI](docs/memory/2026-11-10-preview-abi-contract.md)：ShellApi 升到 ABI 11，新增 preview info/read；Runtime 缓存并按 fingerprint 返回 BGRA8 帧；Host RPC 和 Shell client 接通；编辑器改用 `vm_client.previewFrame`，不再本地跑文档预览 DAG。源内负例、Host mock、payload/single-exe 通过；没有专门真窗口视觉验收。
+
+- [2026-11-10 架构边界守卫](docs/memory/2026-11-10-architecture-guard.md)：新增 `tools/verify_architecture.py` 与 `build verify-architecture`，拒绝 `apps`/`shell` 直接导入 runtime，及 vne/runtime/host/bootstrap 的跨层 UI 导入；当前六层通过。它是直接 `@import` 扫描，不是完整模块图证明。
+
+- [2026-11-10 Shell 投影边界](docs/memory/2026-11-10-shell-projection-boundary.md)：`apps/desktop` 与 `apps/editor` 不再直接导入 `runtime`，改用 `vm_client` 暴露的 Context/Preview/Frame/Paths；build 依赖也移除。Shell 直接依赖 Runtime 的位置收口到 `vm_client` 一个适配层；本地预览求值、documents/render/image 和 preview 帧 ABI 仍未拆除。
+
+- [2026-11-10 Shell 命令边界](docs/memory/2026-11-10-shell-command-boundary.md)：命令队列从 Runtime 私有模块提升为 `vne.command`，Runtime 与 Shell 共用；desktop view 不再直接导入 runtime，PNG 尺寸检查经 `vm_client`。命令语义/ABI/协议字节未变；Shell 仍持有 RuntimeContext 与 documents/render/image，后续继续拆投影边界。
+
+- [2026-11-10 安装器入口与瘦身](docs/memory/2026-11-10-installer-entry.md)：安装器快捷方式/关联/卸载停止改指统一 `cutrans.exe`，preflight 用 `cutrans.exe --diag`；安装包只带 exe/licenses/README，不再复制 context 或 vm-pack（context 已内嵌，vm-pack 不再需要），约 4.8 MB；旧多目录布局明确拒绝自动升级。`build installer` 与 `verify-installer-artifact` 通过（preflight=1、registration_untouched=1）；真实安装/更新/卸载/发布未做。
+
+- [2026-11-10 内嵌 Payload 原型](docs/memory/2026-11-10-embedded-payload.md)：构建期把 desktop/资源库 payload 打成 blob 编入 `cutrans.exe`，portable 和 installed run context 也分别内嵌；`build portable-single` 只产出约 14 MB 的 `zig-out/single/cutrans.exe`，`build verify-single-exe` 通过 portable start/shell/stop、缓存修复和 installed 无 context 场景且不生成外部 payload/context。缓存逐文件校验、损坏重建，staging+rename 支持并发物化，旧于30天的目录尽力清理；显式/损坏 Shell 仍拒绝。安装器/真实安装/发布未做。
+
+- [2026-11-10 NanoUI 同步到官方 v0.14](docs/memory/2026-11-10-nanoui-v014-sync.md)：vendor 从 fork 0.12 切到官方 `7b32272`/v0.14，采用 `chrome.zig` 自绘标题栏（保留原生 resize/Snap/阴影），退休 borderless/D3D11 纹理/stride 等已上游补丁；只保留 `ui.d3d11`、`window_maximize`、`on_present`、`kv` 六文件本地补丁。`build test`、payload、local-sources、safe-exit 通过；`test-nanoui` 连续四次 585 pass / 21 skip / 0 fail（此前一次 `WS_EX_TOPMOST` 失败未复现），`verify-nanoui-chrome` 覆盖隐藏窗口 chrome 回归；真实 GUI/安装未验收。
+
+- [2026-11-10 自定义窗口 chrome 与安全关闭](docs/memory/2026-11-10-custom-chrome.md)：原生 X/Alt+F4 先进入安全退出；桌面改为无边框自绘标题栏，自绘最小化/最大化/安全退出；该页的 borderless 方案已被 v0.14 同步取代，安全关闭语义保留。
+
+- [2026-11-10 宿主边界：窗口与外部素材口岸](docs/memory/2026-11-10-host-boundary.md)：桌面默认启动最大化、F11 最大化/还原并保留原生最小化；外部文件统一走 Resource API `register_file`，支持 OS 拖入、系统文件对话框、来源/引用状态和 VM 私有目录拒绝。实际 local-sources、payload、safe-exit 与仓库审计通过；真实 Explorer 拖放、系统对话框、无边框全屏与安装未验收。
+
+- [2026-11-09 工作回执、Host 恢复与 Shell 锁修复](docs/memory/2026-11-09-work-recovery.md)：工作正文自动保存改为空闲防抖，Catalog v4 用环形回执＋持久客户端高水位消除 64 次硬上限；Host 停在 stopping／degraded 后普通启动可收尾重启，控制转换错误不再杀 Host；默认桌面与同 id 载荷变化拒绝迁移 Shell 锁，内置桌面／资源库兄弟切换保留。实际 DLL／Host／安全退出／Payload 场景已验证，真实 GUI、安装与强制抢占未覆盖。
+
+- [2026-11-09 当前进度检查点](docs/memory/2026-11-09-checkpoint.md)：集中记录当前架构、业务边界、实际验证、发行／安装／安全与工程待办，以及后续接续顺序；只整理记忆，没有新增实现或发布。
+
+- [2026-11-09 环境内安全退出](docs/memory/2026-11-09-safe-exit.md)：独立 NanoUI 退出入口已接通停止受理、等待／取消、草稿保护、失败重试和正常停止；冷恢复与真实 Host 场景已验证，强制抢占和真实 GUI／安装验收仍未覆盖。
+
+- [2026-11-09 PayloadSource 与内置 NanoUI 载荷](docs/memory/2026-11-09-payload-source.md)：统一桌面与资源库改用独立资源清单，默认不再要求旧 Shell EXE；无旧文件场景、显式旧 Pack 回退及损坏拒绝已验证，资源内嵌与安全退出仍待后续。
+
+- [2026-11-09 静态 RuntimeProvider 与动态回退](docs/memory/2026-11-09-static-runtime.md)：统一 Host 默认使用静态 Runtime，无 Runtime DLL 的真实启动／NanoUI／恢复已验证；动态 Pack 与显式锁迁移保留，最终载荷与安全退出仍待后续。
+
+- [2026-11-09 同 EXE 控制器、Host 与 NanoUI 角色](docs/memory/2026-11-09-same-exe-roles.md)：`cutrans.exe` 统一承担控制器、Host、桌面和资源库角色，保留独立进程、Pack 校验与旧入口回退；静态 Runtime、内嵌载荷和完整安全退出仍待实现。
+
+- [2026-11-09 虚拟环境先验与 EnvironmentSession](docs/memory/2026-11-09-environment-session.md)：以现有 Host 附着、Shell 校验和 Runtime epoch 建立无物理路径的环境身份；桌面、资源库和本机文件共用启动屏障，单 EXE 与完整安全退出仍待实现。
+
+- [2026-11-08 本机文件只读浏览与显式登记](docs/memory/2026-11-08-local-file-sources.md)：Resource API v4、Host 一层浏览／成员读取、NanoUI 本机文件页、显式收录与插入文档及实际 DLL／Host 验收。
+
+- [2026-11-08 单一发行入口与虚拟环境安全退出目标](docs/memory/2026-11-08-single-exe-safe-exit.md)：用户明确最终只公开一个控制启动／进入 VM 的 EXE，内部提供独立安全退出；记录单文件与进程边界、启动校验、退出状态机及未实现范围。
 
 - [2026-11-08 工作正文、草稿与固定版本分离](docs/memory/2026-11-08-work-documents.md)：Resource API v3、持久草稿与工作 revision、成功回执跨恢复、NanoUI 正文编辑及实际 DLL／Host 验收。
 

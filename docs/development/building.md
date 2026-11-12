@@ -4,7 +4,7 @@
 
 ## 固定环境与恢复
 
-需要 Windows x64、Python 3 和网络连接。克隆后先恢复固定版本的完整工具链与第三方二进制：
+需要 Windows x64、Python 3（uv 托管的 3.12 或带 `pythonw.exe` 的解释器）和网络连接。克隆后先恢复固定版本的完整工具链与第三方二进制：
 
 ```powershell
 git clone -c core.longpaths=true https://github.com/TLBtianhu/Cutrans.git
@@ -21,17 +21,17 @@ cd Cutrans
 完整 Zig 工具链与这些 exe/dll/lib/pdb 均被 `.gitignore` 排除，不进入源码快照。Zig 的校验过的下载缓存位于 `zig-pkg/bootstrap/`，无需重复下载。需要代理时可显式执行：
 
 ```powershell
-.\tools\dev.ps1 bootstrap --proxy http://127.0.0.1:7897
-.\tools\dev.ps1 bootstrap --installer-tool --proxy http://127.0.0.1:7897
+.\tools\dev.ps1 bootstrap
+.\tools\dev.ps1 bootstrap --installer-tool
 ```
 
 已存在且哈希一致的文件会复用；哈希不同的文件默认拒绝覆盖，确认后可用 `--force` 替换。用户运行便携版或安装版都不需要安装 Zig、Python 或 Inno。
 
 默认 Windows x64 构建固定为 `x86_64_v2`，避免开发机指令集意外进入分发物；开发者可用 `-Dcpu=native` 做本机构建，但不能用它替代分发基线验收。尚未在只支持更早指令集的 CPU 上实机验证。
 
-NanoUI `0.12.0`（fork `00e5813`）的固定源码副本位于 `third_party/nanoui/`，来源提交、许可证和补丁策略见其中的 `VENDOR.md`。它是 Cutrans 独立维护的物理副本，不与 OTTO 共用工作区，也不依赖本机 `C:\src` 路径。主桌面已统一为 NanoUI，包含首页、编辑器、资源库、CLI 和任务视图；独立资源库诊断 Shell 保留，旧 zgui/zglfw/wgpu 与 CUI 已移除。接入时关闭 WebView2。通用改进经完整测试后少量、分批反哺上游，不为每次小编辑频繁提交 PR。
+NanoUI `0.14.0`（官方 `7b32272`）的固定源码副本位于 `third_party/nanoui/`，来源提交、许可证和补丁策略见其中的 `VENDOR.md`。它是 Cutrans 独立维护的物理副本，不与 OTTO 共用工作区，也不依赖本机 `C:\src` 路径。主桌面已统一为 NanoUI，包含首页、编辑器、资源库、CLI 和任务视图；独立资源库诊断 Shell 保留，旧 zgui/zglfw/wgpu 与 CUI 已移除。桌面窗口使用官方 `chrome.zig` 的原生 frame + 自绘标题栏（`decorations=true`、`title_bar=.hidden`），保留原生 resize/Snap/系统菜单/DWM 阴影；接入时关闭 WebView2。通用改进经完整测试后少量、分批反哺上游，不为每次小编辑频繁提交 PR。
 
-依赖源码基线由 `dependencies.lock.json` 固定。`python tools/dependency_audit.py` 验证有效源码树；来源提交缺失的旧 vendor 明确标为旧快照，不伪造上游身份。更新必须同时审查官方→fork→Cutrans 的差异，再显式更新锁。
+依赖源码基线由 `dependencies.lock.json` 固定。`python tools/dependency_audit.py` 验证有效源码树；来源提交缺失的旧 vendor 明确标为旧快照，不伪造上游身份。更新必须审查官方→Cutrans 的差异，再显式更新锁。
 
 纯语义验证可独立于桌面与OS Port配置：在源码根使用`tools/dev.ps1 build test-core -Dcore-only=true`。非Windows主机默认只配置语义目标，完整产品仍只承诺Windows验收。
 
@@ -47,13 +47,14 @@ NanoUI `0.12.0`（fork `00e5813`）的固定源码副本位于 `third_party/nano
 | --- | --- |
 | 纯语义／模型 | `test-core -Dcore-only=true`、`test` |
 | NanoUI源码／前端编译 | `test-nanoui`、`test-nanoui-desktop`、`test-nanoui-library` |
-| 分发组装 | `install`、`portable`、`runtime-pack`、`shell-pack`、`nanoui-library-pack`、`library-probe` |
+| 分发组装 | `install`、`portable`、`portable-single`、`runtime-pack`、`shell-pack`、`nanoui-library-pack`、`payload-pack`、`library-probe` |
 | 文档／作业实际产物 | `verify-edit-commit`、`verify-workspace`、`verify-workspace-rpc`、`verify-jobs`、`verify-jobs-async` |
-| 资源实际产物 | `verify-assets`、`verify-resource-versions`、`verify-source-identity`、`verify-resource-operations`、`verify-resident-resources`、`verify-resource-registration`、`verify-work-documents` |
+| 资源实际产物 | `verify-assets`、`verify-resource-versions`、`verify-source-identity`、`verify-resource-operations`、`verify-resident-resources`、`verify-resource-registration`、`verify-work-documents`、`verify-local-sources` |
 | Host／协议／回放 | `verify-host`、`verify-host-transport`、`verify-runtime`、`verify-replay`、`verify-input`、`verify-playback` |
 | 自动化／环境 | `verify-automation`、`verify-isolation`、`diag-user` |
-| Shell／GUI集成，单独安排 | `verify-shell`、`verify-attach`、`verify-nanoui-library`、`verify-nanoui-portable` |
+| Shell／GUI集成，单独安排 | `verify-shell`、`verify-attach`、`verify-nanoui-library`、`verify-nanoui-portable`、`verify-same-file`、`verify-static-runtime`、`verify-payload`、`verify-preview`、`verify-reconnect`、`verify-single-exe`、`verify-nanoui-chrome`、`verify-safe-exit` |
 | 安装器 | `installer`、`verify-installer-artifact`；完整登记测试另见下文 |
+| 架构边界 | `verify-architecture` |
 
 表中是可运行入口，不是本次执行清单。部分Shell／GUI目标可能启动真实窗口，不能当作默认headless检查。正常开发可运行build目标；封存验收时应直接针对同一份已构建产物运行对应验证脚本，避免每项验证重新构建。
 
@@ -79,7 +80,9 @@ if ($quietBuild.ExitCode -ne 0) { throw "后台验证失败，退出码 $($quiet
 
 `runtime-pack` 在 `zig-out/vm-runtime/` 生成独立 Runtime；`verify-runtime` 会真实动态装载它，验证保存/恢复、便携副本、绝对路径打开和篡改拒绝，不要求旧图形库在场。`shell-pack` 在 `zig-out/vm-shell/` 生成统一 NanoUI 桌面 Shell；`verify-shell` 验证缺失拒绝、真实 VM→Shell 启动与播放帧号投影，不截图或自动输入。`verify-replay` 在两个隔离数据根中比较命令回放的文档、History、Task 状态哈希、逻辑时间和 PNG，并验证语义输入回放与命令/输入时间倒退拒绝。`verify-input` 通过真实分发 Runtime DLL 录制 50 条语义事件，覆盖添加 invert、撤销、重做与文本上下文抑制；复制日志到全新数据根后校验相同文档指纹和 History 游标，不注入 OS 输入。`verify-playback` 用真实单调时钟验证四帧播放与停止/重启。`verify-assets` 经真实分发 Runtime DLL 验证素材租约复用、PNG 预览、独立快照导出/恢复和损坏内容拒绝；原外部文件删除后，已加载素材仍可预览。还验证临时 external 拒绝、持久原文件直接插入、显式快照插入、撤销/重做、PNG 导出、租约释放，以及重启后 Station 为空但 Source 文档仍可导出。内容变化不会覆盖旧文档版本，只有显式再次插入才更新；缺失文件、损坏快照、损坏授权目录和 Source 哈希不符均按对应错误拒绝。`verify-shell` 另通过显式 `--assets-demo` 走通真实桌面的素材选择、预览、库内独立化、插入和文档 GPU 提交，不模拟鼠标键盘。`verify-assets` 还覆盖库项去重、独立化后删除原文件、库内创建、重启恢复、拥有态禁止刷新、篡改内容与损坏目录。
 
-`verify-host` 通过真实 `cutrans_vm.exe`、独立 Host 和本机消息管道验证幂等启动、单实例、旧入口双写者拒绝、保存失败后的 degraded 与重试、异常终止恢复，以及应用目录不被写入。`verify-attach` 进一步验证关闭 Shell 后 Host 继续存活、四次附着、素材与播放的真实提交计数、Shell 身份锁和重启恢复。
+`verify-same-file` 使用便携目录的 `cutrans.exe` 验证控制器、Host、桌面和资源库角色；只读查询真实进程路径与内部角色，覆盖环境建立、NanoUI 隐藏测试、Shell 身份提交及 Host 停止和恢复，不创建可见窗口。统一入口默认使用静态 Runtime 和 `payload/` 资源，仍使用独立进程。`verify-payload` 在隔离副本中移除旧 EXE、Runtime 和旧 Shell Pack，验证默认载荷、显式旧 Pack 回退以及缺失／损坏拒绝，不删除原产物；内嵌 payload/context 的缺失回退也在这里验证。`verify-single-exe` 直接跑 `zig-out/single/cutrans.exe`，确认目录只有一个文件、start/shell/stop 成功且不生成外部 payload/context。`verify-preview` 通过真实 Host 和隐藏桌面 Shell 请求两帧，验证 cache、generation、短 buffer 与文档变化后的 stale fingerprint；它不证明 Host 重启后旧请求恢复，也不打开可见窗口。`verify-reconnect` 停止并重启真实 Host，隐藏 Shell 的下一次 pump 自动发现并重连，再跑完普通桌面场景。`verify-nanoui-chrome` 复用 `test-nanoui` 的 `tests_chrome.zig`，在真实隐藏窗口上验证自绘标题栏的顶边 client、边缘/caption/maximize hit-test 和 HTMAXBUTTON 转发；它不替代真实鼠标拖拽/resize 验收。`verify-static-runtime` 进一步在隔离副本中移除 `runtime/`，验证静态 Host／NanoUI、保存恢复、显式动态 Pack 回退和锁迁移，不删除原产物。安装版 context 已内嵌，真实安装和最终发行仍需单独验收。`verify-host` 通过真实 `cutrans_vm.exe`、独立 Host 和本机消息管道验证幂等启动、单实例、旧入口双写者拒绝、保存失败后的 degraded 与重试、异常终止恢复，以及应用目录不被写入。`verify-attach` 进一步验证关闭 Shell 后 Host 继续存活、四次附着、素材与播放的真实提交计数、Shell 身份锁和重启恢复。
+
+`verify-safe-exit` 通过真实 Host 验证停止新业务、等待已有任务、协作取消、撤销退出及保存失败重试，并通过 `--exit-demo` 验证 NanoUI 退出按钮、草稿保护、失败重试和冷草稿恢复。它不打开可见窗口，不证明强制抢占式取消、真实视觉／IME 或安装验收。
 
 安装器构建和不注册系统的产物预检是额外的 Windows 步骤：
 
@@ -89,7 +92,7 @@ if ($quietBuild.ExitCode -ne 0) { throw "后台验证失败，退出码 $($quiet
 .\tools\dev.ps1 build verify-installer-artifact
 ```
 
-安装器输出到 `zig-out/installer/`，这里仍是可重建的产物。`verify-isolation` 在完整便携副本中注入环境变量、工作目录、链接、锁文件和故障，保存命令及结果；它不操作产品系统登记。`verify-installer-artifact` 对实际安装包执行 `/PreflightOnly=1`，验证临时安装布局、诊断、参数拒绝和登记未变；安装器此模式按约定返回 **7**，表示在复制和登记之前主动退出，不能称为安装成功。
+安装器输出到 `zig-out/installer/`，这里仍是可重建的产物。当前安装包只复制统一 `cutrans.exe`、licenses 和 README；installed context 已内嵌，`vm-pack.json` 不再需要，也不再复制。`verify-isolation` 在完整便携副本中注入环境变量、工作目录、链接、锁文件和故障，保存命令及结果；它不操作产品系统登记。`verify-installer-artifact` 对实际安装包执行 `/PreflightOnly=1`，验证临时安装布局、统一 `cutrans.exe --diag`、参数拒绝和登记未变；安装器此模式按约定返回 **7**，表示在复制和登记之前主动退出，不能称为安装成功。
 
 可以直接针对同一份已构建安装包运行，并在发布前再次核对SHA-256。以下保留验证脚本的实际参数；Agent／无人值守执行时按上节低层入口将Python命令置于隐藏runner内，且不能以build目标重建已封存安装包：
 

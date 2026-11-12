@@ -5,7 +5,7 @@ pub const ios = @import("tools/ios/bundle.zig");
 /// Android APKs, likewise: `@import("nanoui").android.apk(b, lib, .{ .name = "Notes", .id = "com.example.notes" })`.
 pub const android = @import("tools/android/apk.zig");
 
-const examples = [_][]const u8{ "hello", "counter", "gallery", "duo", "board", "basics", "map", "turn", "access", "todo", "sgbus", "browser", "drop" };
+const examples = [_][]const u8{ "hello", "counter", "gallery", "ruler", "duo", "board", "basics", "map", "turn", "access", "todo", "sgbus", "browser", "drop", "scenes" };
 const frameworks = [_][]const u8{ "AppKit", "WebKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
 const ios_frameworks = [_][]const u8{ "UIKit", "CoreLocation", "MapKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
 
@@ -15,6 +15,7 @@ pub fn build(b: *std.Build) void {
     const portable = b.option(bool, "portable", "Use portable text and CPU rendering instead of native rasterization (for tests)") orelse false;
     const options = b.addOptions();
     options.addOption(bool, "portable", portable);
+    options.addOption(bool, "in_rt", false);
     // The one place the version is kept: build.zig.zon (tools/version.sh).
     options.addOption([]const u8, "version", @import("build.zig.zon").version);
 
@@ -26,6 +27,27 @@ pub fn build(b: *std.Build) void {
     });
     nanoui.addOptions("build_options", options);
     const os = target.result.os.tag;
+    if (os == .macos) {
+        const rt_options = b.addOptions();
+        rt_options.addOption(bool, "portable", portable);
+        rt_options.addOption(bool, "in_rt", true);
+        rt_options.addOption([]const u8, "version", @import("build.zig.zon").version);
+        const rt_mod = b.createModule(.{
+            .root_source_file = b.path("src/rt.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        rt_mod.addOptions("build_options", rt_options);
+        if (!target.query.isNative()) {
+            if (std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &target.result)) |sdk| {
+                rt_mod.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "System/Library/Frameworks" }) });
+                rt_mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) });
+            }
+        }
+        const rt_lib = b.addLibrary(.{ .linkage = .static, .name = "nanoui-rt", .root_module = rt_mod });
+        nanoui.linkLibrary(rt_lib);
+    }
     if (os == .macos) {
         // A target other than this Mac's (an older macOS for a release,
         // `-Dtarget=aarch64-macos.13.0`) gets no SDK from Zig: use Xcode's.
@@ -62,13 +84,10 @@ pub fn build(b: *std.Build) void {
     }
     if (os == .windows) {
         // The D3D11 renderer (`ui/d3d11.zig`): d3d11 and dxgi are the
-
-        // system's, and d3dcompiler_47 turns the HLSL into shaders at
-        // startup (it ships with Windows and every DirectX runtime).
-        // shell32 has the drag-and-drop entry points (`DragAcceptFiles`,
-        // `DragQueryFileW`, `DragFinish` in window.zig) and `ShellExecuteW`
-        // (desktop.zig). Linked with the module, so every app gets them.
-        for ([_][]const u8{ "d3d11", "dxgi", "d3dcompiler_47", "shell32" }) |l| nanoui.linkSystemLibrary(l, .{});
+        // system's; d3dcompiler_47 turns the HLSL into shaders at startup,
+        // and the Windows SDK has no import library for it (only the DLL),
+        // so `ui/d3d11_glue.zig` loads it when it first compiles one.
+        for ([_][]const u8{ "d3d11", "dxgi", "dwrite", "gdi32", "ole32", "dwmapi", "imm32", "user32", "shell32", "comdlg32", "shlwapi" }) |l| nanoui.linkSystemLibrary(l, .{});
     }
     // WebView2 (pages on Windows) is linked the way `d3dcompiler_47` is: at
     // no link time at all. `windows/webview2.zig` loads `WebView2Loader.dll`
@@ -92,7 +111,6 @@ pub fn build(b: *std.Build) void {
                 b.getInstallStep().dependOn(&dll.step);
             }
         }
-
     }
     // Elsewhere GTK is loaded when the app starts (dlopen): nothing to link.
     // HTTP there is http-zig's (nanoui.http), fetched only for those targets.
@@ -117,8 +135,8 @@ pub fn build(b: *std.Build) void {
 
     for (examples) |name| {
         // Pages (the hello and browser examples) need a webview: WKWebView on
-        // macOS, WebView2 on Windows, WebKitGTK on Linux.
-        const has_pages = os == .macos or os == .windows or (os == .linux and !target.result.abi.isAndroid());
+        // macOS and iOS, WebView2 on Windows, WebKitGTK on Linux.
+        const has_pages = os == .macos or os == .ios or os == .windows or (os == .linux and !target.result.abi.isAndroid());
         if (!has_pages and (std.mem.eql(u8, name, "hello") or std.mem.eql(u8, name, "browser"))) continue;
         if (os == .ios) {
             addIosExample(b, name, target, optimize, nanoui);
@@ -138,6 +156,8 @@ pub fn build(b: *std.Build) void {
             }),
         });
         b.installArtifact(exe);
+        if (std.mem.eql(u8, name, "ruler"))
+            b.step("ruler", "Build the native ruler example").dependOn(&b.addInstallArtifact(exe, .{}).step);
         const run = b.addRunArtifact(exe);
         run.addPassthruArgs();
         b.step(b.fmt("run-{s}", .{name}), b.fmt("Run the {s} example", .{name})).dependOn(&run.step);
@@ -161,7 +181,25 @@ pub fn build(b: *std.Build) void {
     });
     b.step("reel", "Build the motion reel (zig-out/bin/nanoui-reel)").dependOn(&b.addInstallArtifact(reel, .{}).step);
 
-    const tests = b.addTest(.{ .root_module = nanoui });
+    // Deterministic input replay through the same native view and CPU renderer.
+    const ruler_replay = b.addExecutable(.{
+        .name = "ruler-replay",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/ruler/replay.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "nanoui", .module = nanoui }},
+        }),
+    });
+    b.step("ruler-replay", "Build the offscreen ruler replay").dependOn(&b.addInstallArtifact(ruler_replay, .{}).step);
+
+    // `-Dllvm=false -Dnew-linker=false`: the tests built as zorg builds apps
+    // (the self-hosted backend, the old MachO linker).
+    const use_llvm = b.option(bool, "llvm", "Build the tests with the LLVM backend (false = self-hosted)");
+    const new_linker = b.option(bool, "new-linker", "Link the tests with Zig's new linker");
+    const filters = b.option([]const []const u8, "test-filter", "Run only the tests whose names contain this") orelse &.{};
+    const tests = b.addTest(.{ .root_module = nanoui, .use_llvm = use_llvm, .filters = filters });
+    tests.use_new_linker = new_linker;
     // On Android, the tests are a program for a device (`adb push`, run in `adb shell`).
     if (target.result.abi.isAndroid()) if (android.Sdk.find(b)) |sdk| {
         _ = android.linkNdk(b, tests, sdk);
@@ -194,6 +232,29 @@ pub fn build(b: *std.Build) void {
         tools_step.dependOn(&b.addRunArtifact(t).step);
     }
 
+    const font_bench = b.addExecutable(.{
+        .name = "font-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/font_bench.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "build_options", .module = options.createModule() }},
+        }),
+    });
+    if (os == .windows) {
+        font_bench.root_module.linkSystemLibrary("dwrite", .{});
+        font_bench.root_module.linkSystemLibrary("psapi", .{});
+    } else if (os == .macos) {
+        for (frameworks) |f| font_bench.root_module.linkFramework(f, .{});
+        font_bench.root_module.linkSystemLibrary("objc", .{});
+    } else if (os == .ios) {
+        for (ios_frameworks) |f| font_bench.root_module.linkFramework(f, .{});
+        font_bench.root_module.linkSystemLibrary("objc", .{});
+    }
+    const run_font_bench = b.addRunArtifact(font_bench);
+    run_font_bench.addPassthruArgs();
+    b.step("font-bench", "Measure font scanning and private memory headlessly").dependOn(&run_font_bench.step);
+
     const lines = b.addExecutable(.{
         .name = "lines",
         .root_module = b.createModule(.{
@@ -223,6 +284,7 @@ fn addIosExample(b: *std.Build, name: []const u8, target: std.Build.ResolvedTarg
     const opts: ios.Options = .{
         .name = title,
         .id = b.fmt("dev.nanoui.{s}", .{name}),
+        .multiple_windows = std.mem.eql(u8, name, "scenes"),
         .location_usage = if (std.mem.eql(u8, name, "basics") or std.mem.eql(u8, name, "map") or std.mem.eql(u8, name, "sgbus")) "The example shows where you are." else null,
     };
     const bundle = ios.app(b, exe, opts);
@@ -233,6 +295,24 @@ fn addIosExample(b: *std.Build, name: []const u8, target: std.Build.ResolvedTarg
         run.addPassthruArgs();
         step.dependOn(&run.step);
     } else step.dependOn(&b.addFail("run-* runs in the Simulator (-Dtarget=aarch64-ios-simulator); install on a device from Xcode or with xcrun devicectl").step);
+    if (std.mem.eql(u8, name, "counter")) {
+        // Every option `ios.app` takes, checked once they've gone through Xcode's tools.
+        const f = "tools/ios/fixture/";
+        const full = ios.app(b, exe, .{
+            .name = "Fixture",
+            .id = "dev.nanoui.fixture",
+            .info = "  <key>CFBundleURLTypes</key><array><dict><key>CFBundleURLSchemes</key><array><string>fixture</string></array></dict></array>",
+            .assets = b.path(f ++ "Assets.xcassets"),
+            .resources = &.{.{ .path = b.path(f ++ "resource.txt"), .name = "resource.txt" }},
+            .extensions = &.{.{ .path = b.path(f ++ "Widgets.appex"), .name = "Widgets.appex" }},
+            .watch = .{ .path = b.path(f ++ "Fixture Watch.app"), .name = "Fixture Watch.app" },
+            .entitlements = b.path(f ++ "fixture.entitlements"),
+        });
+        const check = b.addSystemCommand(&.{"sh"});
+        check.addFileArg(b.path("tools/ios/check-bundle.sh"));
+        check.addDirectoryArg(full);
+        b.step("test-bundle", "Check an iOS bundle with every option (-Dtarget=aarch64-ios-simulator)").dependOn(&check.step);
+    }
 }
 
 /// An example as an Android app: `zig-out/android/<Name>.apk`, and

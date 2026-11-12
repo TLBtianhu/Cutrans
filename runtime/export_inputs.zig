@@ -1,7 +1,7 @@
 //! Attempt-owned encoded Sources. Capture runs under the session owner lock;
 //! the worker provider never reaches Context, Station, grants or live Catalogs.
 const std = @import("std");
-const documents = @import("documents.zig");
+const documents = @import("vne").documents;
 const image = @import("image.zig");
 const render = @import("render.zig");
 const Context = @import("context.zig").Context;

@@ -4,7 +4,7 @@
 //! 不保存像素帧,不引入全量快照栈或二分梯层。
 
 const std = @import("std");
-const documents = @import("documents.zig");
+const documents = @import("vne").documents;
 
 pub const Edit = union(enum) {
     gain_set: struct { id: u64, before: f32, after: f32 },

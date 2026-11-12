@@ -1,7 +1,7 @@
 const std = @import("std");
 const vne = @import("vne");
 const RuntimeContext = @import("context.zig").Context;
-const command = @import("command.zig");
+const command = @import("vne").command;
 
 pub const Outcome = struct {
     command: ?[]const u8 = null,

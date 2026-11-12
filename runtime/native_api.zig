@@ -2,7 +2,7 @@ const std = @import("std");
 const abi = @import("vne").abi;
 const RuntimeContext = @import("context.zig").Context;
 const paths = @import("paths.zig");
-const command = @import("command.zig");
+const command = @import("vne").command;
 const document_commands = @import("document_commands.zig");
 const workspace = @import("vne").workspace;
 const document_requests = @import("document_requests.zig");
@@ -34,6 +34,7 @@ const Runtime = struct {
     render_work: ?*RenderTask = null,
     render_stopping: bool = false,
     render_worker: std.Thread,
+    preview: @import("render.zig").Preview = .{},
     shell_driver: ?*@import("vne").job_driver.Driver = null,
     // Private deterministic barrier for source-level concurrency tests only.
     before_compute: ?*const fn (*anyopaque) void = null,
@@ -55,6 +56,7 @@ const Runtime = struct {
         self.render_done = .{};
         self.render_work = null;
         self.render_stopping = false;
+        self.preview = .{};
         self.shell_driver = null;
         self.before_compute = null;
         self.compute_observer = null;
@@ -108,6 +110,7 @@ const Runtime = struct {
         self.resource_registry.deinit();
         self.work_registry.deinit();
         self.input_recording.deinit();
+        self.preview.deinit(self.ctx.allocator);
         self.ctx.deinit();
         self.io.deinit();
         allocator.destroy(self);
@@ -320,6 +323,31 @@ const Runtime = struct {
         }
     };
 
+    const LocalSourceTask = struct {
+        runtime: *Runtime,
+        path: []const u8,
+        cursor: u64,
+        limit: u32,
+        read_file: bool,
+        buffer: ?[*]u8,
+        capacity: usize,
+        length: *usize,
+        result: i32 = abi.Status.failed,
+
+        fn run(self: *@This()) void {
+            const bytes = if (self.read_file)
+                @import("local_sources.zig").read(&self.runtime.ctx, self.path)
+            else
+                @import("local_sources.zig").browse(&self.runtime.ctx, self.path, self.cursor, self.limit);
+            const owned = bytes catch |err| {
+                self.result = localStatus(err);
+                return;
+            };
+            defer allocator.free(owned);
+            self.result = copyBytes(owned, self.buffer, self.capacity, self.length);
+        }
+    };
+
     const FlushTask = struct {
         runtime: *Runtime,
         result: anyerror!void = undefined,
@@ -415,6 +443,18 @@ fn report(err: anyerror) i32 {
     };
 }
 
+fn localStatus(err: anyerror) i32 {
+    return switch (err) {
+        error.InvalidSourcePath, error.InvalidSourceCursor, error.InvalidSourceEntry => abi.Status.invalid_arguments,
+        error.ManagedSourceForbidden, error.LinkedSourceUnsupported, error.ReadOnlySourceRequired => abi.Status.permission_denied,
+        error.FileNotFound => abi.Status.not_found,
+        error.DirectoryTooLarge => abi.Status.queue_full,
+        error.OutOfMemory => abi.Status.out_of_memory,
+        error.IoNotReady => abi.Status.not_ready,
+        else => abi.Status.failed,
+    };
+}
+
 fn commandCode(code: command.Code) i32 {
     return switch (code) {
         .ok => abi.Status.ok,
@@ -430,11 +470,11 @@ fn commandCode(code: command.Code) i32 {
     };
 }
 
-export fn cutrans_vm_abi_version() callconv(.c) u32 {
+pub export fn cutrans_vm_abi_version() callconv(.c) u32 {
     return abi.version;
 }
 
-export fn cutrans_vm_create(config: ?*const abi.Config, out_handle: ?*?*anyopaque) callconv(.c) i32 {
+pub export fn cutrans_vm_create(config: ?*const abi.Config, out_handle: ?*?*anyopaque) callconv(.c) i32 {
     const out = out_handle orelse return abi.Status.invalid_arguments;
     out.* = null;
     const value = config orelse return abi.Status.invalid_arguments;
@@ -447,12 +487,12 @@ export fn cutrans_vm_create(config: ?*const abi.Config, out_handle: ?*?*anyopaqu
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_destroy(handle: ?*anyopaque) callconv(.c) void {
+pub export fn cutrans_vm_destroy(handle: ?*anyopaque) callconv(.c) void {
     const runtime = from(handle) catch return;
     runtime.destroy();
 }
 
-export fn cutrans_vm_command_result(handle: ?*anyopaque, name: abi.ByteSlice, arg: abi.ByteSlice, out_task_id: ?*u64) callconv(.c) i32 {
+pub export fn cutrans_vm_command_result(handle: ?*anyopaque, name: abi.ByteSlice, arg: abi.ByteSlice, out_task_id: ?*u64) callconv(.c) i32 {
     if (out_task_id) |out| out.* = 0;
     const runtime = from(handle) catch |err| return report(err);
     const command_name = read(name, true) catch |err| return report(err);
@@ -462,18 +502,18 @@ export fn cutrans_vm_command_result(handle: ?*anyopaque, name: abi.ByteSlice, ar
     return commandCode(result.code);
 }
 
-export fn cutrans_vm_command(handle: ?*anyopaque, name: abi.ByteSlice, arg: abi.ByteSlice) callconv(.c) i32 {
+pub export fn cutrans_vm_command(handle: ?*anyopaque, name: abi.ByteSlice, arg: abi.ByteSlice) callconv(.c) i32 {
     return cutrans_vm_command_result(handle, name, arg, null);
 }
 
-export fn cutrans_vm_workspace_api(handle: ?*anyopaque, out_api: ?*workspace.Api) callconv(.c) i32 {
+pub export fn cutrans_vm_workspace_api(handle: ?*anyopaque, out_api: ?*workspace.Api) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     const out = out_api orelse return abi.Status.invalid_arguments;
     out.* = .{ .context = runtime, .snapshot = cutrans_vm_document_snapshot, .submit = cutrans_vm_document_submit };
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_resource_api(handle: ?*anyopaque, out_api: ?*resource_api.Api) callconv(.c) i32 {
+pub export fn cutrans_vm_resource_api(handle: ?*anyopaque, out_api: ?*resource_api.Api) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     const out = out_api orelse return abi.Status.invalid_arguments;
     out.* = .{
@@ -483,11 +523,13 @@ export fn cutrans_vm_resource_api(handle: ?*anyopaque, out_api: ?*resource_api.A
         .submit = cutrans_vm_resource_submit,
         .work_snapshot = cutrans_vm_work_snapshot,
         .work_submit = cutrans_vm_work_submit,
+        .source_browse = cutrans_vm_source_browse,
+        .source_read = cutrans_vm_local_read,
     };
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_work_snapshot(handle: ?*anyopaque, id: u64, expected: ?*const resource_api.WorkSnapshot, out_snapshot: ?*resource_api.WorkSnapshot, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32 {
+pub export fn cutrans_vm_work_snapshot(handle: ?*anyopaque, id: u64, expected: ?*const resource_api.WorkSnapshot, out_snapshot: ?*resource_api.WorkSnapshot, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32 {
     const required = out_len orelse return abi.Status.invalid_arguments;
     required.* = 0;
     const out = out_snapshot orelse return abi.Status.invalid_arguments;
@@ -502,7 +544,7 @@ export fn cutrans_vm_work_snapshot(handle: ?*anyopaque, id: u64, expected: ?*con
     return task.result;
 }
 
-export fn cutrans_vm_work_submit(handle: ?*anyopaque, request: ?*const resource_api.WorkRequest, out_outcome: ?*resource_api.WorkOutcome) callconv(.c) i32 {
+pub export fn cutrans_vm_work_submit(handle: ?*anyopaque, request: ?*const resource_api.WorkRequest, out_outcome: ?*resource_api.WorkOutcome) callconv(.c) i32 {
     const value = request orelse return abi.Status.invalid_arguments;
     const out = out_outcome orelse return abi.Status.invalid_arguments;
     if (value.struct_size != @sizeOf(resource_api.WorkRequest) or value.api_version != resource_api.version) return abi.Status.abi_mismatch;
@@ -516,6 +558,26 @@ export fn cutrans_vm_work_submit(handle: ?*anyopaque, request: ?*const resource_
     return abi.Status.ok;
 }
 
+pub export fn cutrans_vm_source_browse(handle: ?*anyopaque, path: resource_api.Bytes, cursor: u64, limit: u32, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32 {
+    const required = out_len orelse return abi.Status.invalid_arguments;
+    required.* = 0;
+    const source = resourcePath(path) catch return abi.Status.invalid_arguments;
+    const runtime = from(handle) catch |err| return report(err);
+    var task = Runtime.LocalSourceTask{ .runtime = runtime, .path = source, .cursor = cursor, .limit = limit, .read_file = false, .buffer = buffer, .capacity = buffer_len, .length = required };
+    runtime.execute(Runtime.LocalSourceTask, &task);
+    return task.result;
+}
+
+pub export fn cutrans_vm_local_read(handle: ?*anyopaque, path: resource_api.Bytes, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32 {
+    const required = out_len orelse return abi.Status.invalid_arguments;
+    required.* = 0;
+    const source = resourcePath(path) catch return abi.Status.invalid_arguments;
+    const runtime = from(handle) catch |err| return report(err);
+    var task = Runtime.LocalSourceTask{ .runtime = runtime, .path = source, .cursor = 0, .limit = 0, .read_file = true, .buffer = buffer, .capacity = buffer_len, .length = required };
+    runtime.execute(Runtime.LocalSourceTask, &task);
+    return task.result;
+}
+
 fn resourcePath(value: resource_api.Bytes) ![]const u8 {
     if (value.len == 0 or value.len > resource_api.max_path_size) return error.InvalidArguments;
     const pointer = value.ptr orelse return error.InvalidArguments;
@@ -524,7 +586,7 @@ fn resourcePath(value: resource_api.Bytes) ![]const u8 {
     return path;
 }
 
-export fn cutrans_vm_resource_snapshot(handle: ?*anyopaque, expected: ?*const resource_api.Stamp, out_snapshot: ?*resource_api.Snapshot, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32 {
+pub export fn cutrans_vm_resource_snapshot(handle: ?*anyopaque, expected: ?*const resource_api.Stamp, out_snapshot: ?*resource_api.Snapshot, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32 {
     const required = out_len orelse return abi.Status.invalid_arguments;
     required.* = 0;
     const out = out_snapshot orelse return abi.Status.invalid_arguments;
@@ -535,7 +597,7 @@ export fn cutrans_vm_resource_snapshot(handle: ?*anyopaque, expected: ?*const re
     return task.result;
 }
 
-export fn cutrans_vm_resource_probe(handle: ?*anyopaque, request: ?*const resource_api.ProbeRequest, out_proof: ?*resource_api.Proof) callconv(.c) i32 {
+pub export fn cutrans_vm_resource_probe(handle: ?*anyopaque, request: ?*const resource_api.ProbeRequest, out_proof: ?*resource_api.Proof) callconv(.c) i32 {
     const value = request orelse return abi.Status.invalid_arguments;
     const out = out_proof orelse return abi.Status.invalid_arguments;
     if (value.struct_size != @sizeOf(resource_api.ProbeRequest) or value.api_version != resource_api.version) return abi.Status.abi_mismatch;
@@ -548,7 +610,7 @@ export fn cutrans_vm_resource_probe(handle: ?*anyopaque, request: ?*const resour
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_resource_submit(handle: ?*anyopaque, request: ?*const resource_api.Request, out_outcome: ?*resource_api.Outcome) callconv(.c) i32 {
+pub export fn cutrans_vm_resource_submit(handle: ?*anyopaque, request: ?*const resource_api.Request, out_outcome: ?*resource_api.Outcome) callconv(.c) i32 {
     const value = request orelse return abi.Status.invalid_arguments;
     const out = out_outcome orelse return abi.Status.invalid_arguments;
     if (value.struct_size != @sizeOf(resource_api.Request) or value.api_version != resource_api.version or
@@ -582,7 +644,7 @@ test "resource ABI rejects malformed requests before execution and clears failed
     try std.testing.expectEqual(abi.Status.invalid_arguments, cutrans_vm_resource_submit(null, &request, &outcome));
 }
 
-export fn cutrans_vm_document_snapshot(handle: ?*anyopaque, expected: ?*const workspace.Stamp, out_snapshot: ?*workspace.Snapshot, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32 {
+pub export fn cutrans_vm_document_snapshot(handle: ?*anyopaque, expected: ?*const workspace.Stamp, out_snapshot: ?*workspace.Snapshot, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     const out = out_snapshot orelse return abi.Status.invalid_arguments;
     const required = out_len orelse return abi.Status.invalid_arguments;
@@ -595,7 +657,7 @@ export fn cutrans_vm_document_snapshot(handle: ?*anyopaque, expected: ?*const wo
         if (value.epoch_hi != stamp.epoch_hi or value.epoch_lo != stamp.epoch_lo) return workspace.Status.wrong_epoch;
         if (!value.eql(stamp)) return workspace.Status.stale_version;
     } else if (buffer != null) return abi.Status.invalid_arguments;
-    const text = @import("documents.zig").emitAlloc(&runtime.ctx.document, allocator) catch |err| return report(err);
+    const text = @import("vne").documents.emitAlloc(&runtime.ctx.document, allocator) catch |err| return report(err);
     defer allocator.free(text);
     required.* = text.len;
     out.text_len = text.len;
@@ -605,7 +667,7 @@ export fn cutrans_vm_document_snapshot(handle: ?*anyopaque, expected: ?*const wo
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_document_submit(handle: ?*anyopaque, request: ?*const workspace.Request, out_outcome: ?*workspace.Outcome) callconv(.c) i32 {
+pub export fn cutrans_vm_document_submit(handle: ?*anyopaque, request: ?*const workspace.Request, out_outcome: ?*workspace.Outcome) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     const value = request orelse return abi.Status.invalid_arguments;
     const out = out_outcome orelse return abi.Status.invalid_arguments;
@@ -622,7 +684,7 @@ export fn cutrans_vm_document_submit(handle: ?*anyopaque, request: ?*const works
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_grant_external(handle: ?*anyopaque, path: abi.ByteSlice, access: u32, out_grant_id: ?*u64) callconv(.c) i32 {
+pub export fn cutrans_vm_grant_external(handle: ?*anyopaque, path: abi.ByteSlice, access: u32, out_grant_id: ?*u64) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
@@ -639,7 +701,7 @@ export fn cutrans_vm_grant_external(handle: ?*anyopaque, path: abi.ByteSlice, ac
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_capability_status(handle: ?*anyopaque, id: abi.ByteSlice) callconv(.c) i32 {
+pub export fn cutrans_vm_capability_status(handle: ?*anyopaque, id: abi.ByteSlice) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
@@ -651,7 +713,7 @@ export fn cutrans_vm_capability_status(handle: ?*anyopaque, id: abi.ByteSlice) c
     };
 }
 
-export fn cutrans_vm_document_fingerprint(handle: ?*anyopaque, out_fingerprint: ?*u64) callconv(.c) i32 {
+pub export fn cutrans_vm_document_fingerprint(handle: ?*anyopaque, out_fingerprint: ?*u64) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
@@ -660,7 +722,7 @@ export fn cutrans_vm_document_fingerprint(handle: ?*anyopaque, out_fingerprint: 
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_document_flags(handle: ?*anyopaque, out_flags: ?*u32) callconv(.c) i32 {
+pub export fn cutrans_vm_document_flags(handle: ?*anyopaque, out_flags: ?*u32) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
@@ -669,12 +731,12 @@ export fn cutrans_vm_document_flags(handle: ?*anyopaque, out_flags: ?*u32) callc
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_document_read(handle: ?*anyopaque, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32 {
+pub export fn cutrans_vm_document_read(handle: ?*anyopaque, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
     const required = out_len orelse return abi.Status.invalid_arguments;
-    const text = @import("documents.zig").emitAlloc(&runtime.ctx.document, allocator) catch |err| return report(err);
+    const text = @import("vne").documents.emitAlloc(&runtime.ctx.document, allocator) catch |err| return report(err);
     defer allocator.free(text);
     required.* = text.len;
     const output = buffer orelse return abi.Status.buffer_too_small;
@@ -683,7 +745,7 @@ export fn cutrans_vm_document_read(handle: ?*anyopaque, buffer: ?[*]u8, buffer_l
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_pump(handle: ?*anyopaque) callconv(.c) i32 {
+pub export fn cutrans_vm_pump(handle: ?*anyopaque) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.pumpOnOwnedStack(false) catch |err| return report(err);
     return abi.Status.ok;
@@ -691,7 +753,7 @@ export fn cutrans_vm_pump(handle: ?*anyopaque) callconv(.c) i32 {
 
 /// Shell frames never start or wait for export computation. Scheduling belongs
 /// to the explicitly enabled Host (or direct-Shell) driver.
-export fn cutrans_vm_frame_pump(handle: ?*anyopaque) callconv(.c) i32 {
+pub export fn cutrans_vm_frame_pump(handle: ?*anyopaque) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     var task = Runtime.PlaybackTask{ .runtime = runtime };
     runtime.execute(Runtime.PlaybackTask, &task);
@@ -700,7 +762,7 @@ export fn cutrans_vm_frame_pump(handle: ?*anyopaque) callconv(.c) i32 {
 }
 
 /// Explicit Host scheduling service; manual/replay instances never self-pump.
-export fn cutrans_vm_jobs_pump(handle: ?*anyopaque, out_pending: ?*u32) callconv(.c) i32 {
+pub export fn cutrans_vm_jobs_pump(handle: ?*anyopaque, out_pending: ?*u32) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     const out = out_pending orelse return abi.Status.invalid_arguments;
     out.* = 0;
@@ -714,7 +776,7 @@ export fn cutrans_vm_jobs_pump(handle: ?*anyopaque, out_pending: ?*u32) callconv
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_jobs_flush(handle: ?*anyopaque) callconv(.c) i32 {
+pub export fn cutrans_vm_jobs_flush(handle: ?*anyopaque) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     var task = Runtime.FlushTask{ .runtime = runtime };
     runtime.execute(Runtime.FlushTask, &task);
@@ -722,7 +784,7 @@ export fn cutrans_vm_jobs_flush(handle: ?*anyopaque) callconv(.c) i32 {
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_jobs_read(handle: ?*anyopaque, after_id: u64, buffer: ?[*]u8, capacity: usize, out_len: ?*usize) callconv(.c) i32 {
+pub export fn cutrans_vm_jobs_read(handle: ?*anyopaque, after_id: u64, buffer: ?[*]u8, capacity: usize, out_len: ?*usize) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     const length = out_len orelse return abi.Status.invalid_arguments;
     length.* = 0;
@@ -806,7 +868,7 @@ export fn cutrans_vm_jobs_read(handle: ?*anyopaque, after_id: u64, buffer: ?[*]u
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_input_push(handle: ?*anyopaque, input: ?*const abi.InputEvent, out_serial: ?*u64) callconv(.c) i32 {
+pub export fn cutrans_vm_input_push(handle: ?*anyopaque, input: ?*const abi.InputEvent, out_serial: ?*u64) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
@@ -837,7 +899,7 @@ export fn cutrans_vm_input_push(handle: ?*anyopaque, input: ?*const abi.InputEve
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_input_flush(handle: ?*anyopaque) callconv(.c) i32 {
+pub export fn cutrans_vm_input_flush(handle: ?*anyopaque) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
@@ -845,7 +907,7 @@ export fn cutrans_vm_input_flush(handle: ?*anyopaque) callconv(.c) i32 {
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_input_begin(handle: ?*anyopaque, path: abi.ByteSlice) callconv(.c) i32 {
+pub export fn cutrans_vm_input_begin(handle: ?*anyopaque, path: abi.ByteSlice) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
@@ -854,7 +916,7 @@ export fn cutrans_vm_input_begin(handle: ?*anyopaque, path: abi.ByteSlice) callc
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_input_end(handle: ?*anyopaque, out_report: ?*abi.InputRecordReport) callconv(.c) i32 {
+pub export fn cutrans_vm_input_end(handle: ?*anyopaque, out_report: ?*abi.InputRecordReport) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
@@ -863,7 +925,7 @@ export fn cutrans_vm_input_end(handle: ?*anyopaque, out_report: ?*abi.InputRecor
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_playback_report(handle: ?*anyopaque, out_report: ?*abi.PlaybackReport) callconv(.c) i32 {
+pub export fn cutrans_vm_playback_report(handle: ?*anyopaque, out_report: ?*abi.PlaybackReport) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
@@ -872,7 +934,7 @@ export fn cutrans_vm_playback_report(handle: ?*anyopaque, out_report: ?*abi.Play
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_library_list(handle: ?*anyopaque, out_report: ?*abi.LibraryListReport) callconv(.c) i32 {
+pub export fn cutrans_vm_library_list(handle: ?*anyopaque, out_report: ?*abi.LibraryListReport) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
@@ -909,7 +971,7 @@ export fn cutrans_vm_library_list(handle: ?*anyopaque, out_report: ?*abi.Library
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_library_label(handle: ?*anyopaque, id: u64, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32 {
+pub export fn cutrans_vm_library_label(handle: ?*anyopaque, id: u64, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
@@ -917,7 +979,7 @@ export fn cutrans_vm_library_label(handle: ?*anyopaque, id: u64, buffer: ?[*]u8,
     return copyBytes(label, buffer, buffer_len, out_len);
 }
 
-export fn cutrans_vm_asset_list(handle: ?*anyopaque, out_report: ?*abi.AssetListReport) callconv(.c) i32 {
+pub export fn cutrans_vm_asset_list(handle: ?*anyopaque, out_report: ?*abi.AssetListReport) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
@@ -958,7 +1020,7 @@ fn copyBytes(bytes: []const u8, buffer: ?[*]u8, buffer_len: usize, out_len: ?*us
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_asset_source(handle: ?*anyopaque, asset_id: u64, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32 {
+pub export fn cutrans_vm_asset_source(handle: ?*anyopaque, asset_id: u64, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
@@ -966,7 +1028,7 @@ export fn cutrans_vm_asset_source(handle: ?*anyopaque, asset_id: u64, buffer: ?[
     return copyBytes(asset.source.uri, buffer, buffer_len, out_len);
 }
 
-export fn cutrans_vm_asset_read(handle: ?*anyopaque, asset_id: u64, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32 {
+pub export fn cutrans_vm_asset_read(handle: ?*anyopaque, asset_id: u64, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
@@ -974,7 +1036,7 @@ export fn cutrans_vm_asset_read(handle: ?*anyopaque, asset_id: u64, buffer: ?[*]
     return copyBytes(asset.bytes, buffer, buffer_len, out_len);
 }
 
-export fn cutrans_vm_asset_preview(handle: ?*anyopaque, asset_id: u64, out_info: ?*abi.AssetInfo) callconv(.c) i32 {
+pub export fn cutrans_vm_asset_preview(handle: ?*anyopaque, asset_id: u64, out_info: ?*abi.AssetInfo) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
@@ -995,7 +1057,7 @@ export fn cutrans_vm_asset_preview(handle: ?*anyopaque, asset_id: u64, out_info:
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_asset_open_external(handle: ?*anyopaque, path: abi.ByteSlice, out_asset_id: ?*u64) callconv(.c) i32 {
+pub export fn cutrans_vm_asset_open_external(handle: ?*anyopaque, path: abi.ByteSlice, out_asset_id: ?*u64) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
@@ -1019,7 +1081,7 @@ fn sourceExpectedHash(value: abi.ByteSlice) !?[32]u8 {
     return digest;
 }
 
-export fn cutrans_vm_source_read(handle: ?*anyopaque, uri: abi.ByteSlice, expected_sha256: abi.ByteSlice, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32 {
+pub export fn cutrans_vm_source_read(handle: ?*anyopaque, uri: abi.ByteSlice, expected_sha256: abi.ByteSlice, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32 {
     const out = out_len orelse return abi.Status.invalid_arguments;
     out.* = 0;
     const runtime = from(handle) catch |err| return report(err);
@@ -1044,7 +1106,7 @@ test "source reading validates complete hashes and clears failed output lengths"
     try std.testing.expectEqual(abi.Status.invalid_arguments, cutrans_vm_source_read(null, slice("library://9"), .{}, null, 0, null));
 }
 
-export fn cutrans_vm_frame_report(handle: ?*anyopaque, frame_report: ?*const abi.FrameReport) callconv(.c) i32 {
+pub export fn cutrans_vm_frame_report(handle: ?*anyopaque, frame_report: ?*const abi.FrameReport) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
@@ -1078,7 +1140,7 @@ export fn cutrans_vm_frame_report(handle: ?*anyopaque, frame_report: ?*const abi
     return abi.Status.ok;
 }
 
-export fn cutrans_vm_replay(handle: ?*anyopaque, path: abi.ByteSlice, out_report: ?*abi.ReplayReport) callconv(.c) i32 {
+pub export fn cutrans_vm_replay(handle: ?*anyopaque, path: abi.ByteSlice, out_report: ?*abi.ReplayReport) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
@@ -1105,11 +1167,51 @@ fn slice(value: []const u8) abi.ByteSlice {
     return .{ .ptr = value.ptr, .len = value.len };
 }
 
-export fn cutrans_vm_start_shell(handle: ?*anyopaque, request: ?*const abi.ShellRequest) callconv(.c) i32 {
+pub export fn cutrans_vm_preview_info(handle: ?*anyopaque, expected: u64, out_info: ?*abi.PreviewInfo) callconv(.c) i32 {
+    const runtime = from(handle) catch |err| return report(err);
+    const out = out_info orelse return abi.Status.invalid_arguments;
+    if (expected == 0) return abi.Status.invalid_arguments;
+    runtime.mutex.lockUncancelable(runtime.io.io());
+    defer runtime.mutex.unlock(runtime.io.io());
+    if (expected != runtime.ctx.document.fingerprint()) return abi.Status.invalid_state;
+    const frame = runtime.preview.currentWithProvider(&runtime.ctx.document, runtime.ctx.allocator, @import("render.zig").workspaceProvider(&runtime.ctx)) catch |err| return report(err);
+    out.* = .{
+        .struct_size = @sizeOf(abi.PreviewInfo),
+        .abi_version = @import("vne").preview.version,
+        .width = frame.width,
+        .height = frame.height,
+        .format = @intFromEnum(@import("vne").preview.Format.bgra8),
+        .reserved = 0,
+        .generation = frame.generation,
+        .fingerprint = expected,
+        .epoch_hi = runtime.ctx.runtime_origin.epoch_hi,
+        .epoch_lo = runtime.ctx.runtime_origin.epoch_lo,
+        .revision = runtime.ctx.runtime_origin.revision,
+        .bytes_len = frame.pixels.len,
+    };
+    return abi.Status.ok;
+}
+
+pub export fn cutrans_vm_preview_read(handle: ?*anyopaque, expected: u64, buffer: ?[*]u8, capacity: usize, out_len: ?*usize) callconv(.c) i32 {
+    const runtime = from(handle) catch |err| return report(err);
+    const required = out_len orelse return abi.Status.invalid_arguments;
+    if (expected == 0) return abi.Status.invalid_arguments;
+    runtime.mutex.lockUncancelable(runtime.io.io());
+    defer runtime.mutex.unlock(runtime.io.io());
+    if (expected != runtime.ctx.document.fingerprint()) return abi.Status.invalid_state;
+    const frame = runtime.preview.currentWithProvider(&runtime.ctx.document, runtime.ctx.allocator, @import("render.zig").workspaceProvider(&runtime.ctx)) catch |err| return report(err);
+    required.* = frame.pixels.len;
+    const output = buffer orelse return abi.Status.buffer_too_small;
+    if (capacity < frame.pixels.len) return abi.Status.buffer_too_small;
+    @memcpy(output[0..frame.pixels.len], frame.pixels);
+    return abi.Status.ok;
+}
+
+pub export fn cutrans_vm_start_shell(handle: ?*anyopaque, request: ?*const abi.ShellRequest) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
     const value = request orelse return abi.Status.invalid_arguments;
     if (value.struct_size < @sizeOf(abi.ShellRequest) or value.abi_version != abi.version) return abi.Status.abi_mismatch;
-    if (value.playback_frames < 0 or value.playback_frames > 600 or value.asset_workspace > 1) return abi.Status.invalid_arguments;
+    if (value.playback_frames < 0 or value.playback_frames > 600 or value.asset_workspace > 2) return abi.Status.invalid_arguments;
     const resource = read(value.resource_dir, true) catch |err| return report(err);
     const open_path = read(value.open_path, false) catch |err| return report(err);
     const record_path = read(value.record_input, false) catch |err| return report(err);
@@ -1125,14 +1227,14 @@ export fn cutrans_vm_start_shell(handle: ?*anyopaque, request: ?*const abi.Shell
     {
         runtime.mutex.lockUncancelable(io);
         defer runtime.mutex.unlock(io);
-        if (open_path) |path| {
+        if (value.asset_workspace != 2) if (open_path) |path| {
             if (!std.fs.path.isAbsolute(path)) return abi.Status.invalid_arguments;
             const grant_id = runtime.ctx.mounts.grantExternal(allocator, path, .read_write) catch |err| return report(err);
             var uri_buffer: [64]u8 = undefined;
             const uri = std.fmt.bufPrint(&uri_buffer, "external://{d}", .{grant_id}) catch return abi.Status.failed;
             const result = runtime.ctx.command.dispatch(.{ .name = "doc.open", .arg = uri });
             if (result.code != .ok) return commandCode(result.code);
-        }
+        };
         if (record_path) |path| runtime.input_recording.start(&runtime.ctx, path) catch |err| return report(err);
     }
     const entry_path = std.fs.path.join(allocator, &.{ resource.?, parsed.value.entry }) catch |err| return report(err);
@@ -1173,6 +1275,8 @@ export fn cutrans_vm_start_shell(handle: ?*anyopaque, request: ?*const abi.Shell
         .workspace_api = cutrans_vm_workspace_api,
         .source_read = cutrans_vm_source_read,
         .resource_api = cutrans_vm_resource_api,
+        .preview_info = cutrans_vm_preview_info,
+        .preview_read = cutrans_vm_preview_read,
     };
     var direct_jobs: @import("vne").job_driver.Driver = undefined;
     {
@@ -1216,6 +1320,56 @@ fn testRuntime(dir: std.Io.Dir) !*Runtime {
 
 fn testWait(event: *std.Io.Event) !void {
     try event.waitTimeout(std.testing.io, .{ .deadline = .fromNow(std.testing.io, .{ .raw = .{ .nanoseconds = 3 * std.time.ns_per_s }, .clock = .awake }) });
+}
+
+test "native preview epoch changes across runtime recreation" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const first = try testRuntime(tmp.dir);
+    const fp_first = first.ctx.document.fingerprint();
+    var first_info: abi.PreviewInfo = undefined;
+    try std.testing.expectEqual(abi.Status.ok, cutrans_vm_preview_info(first, fp_first, &first_info));
+    try @import("vne").preview.validateInfo(first_info);
+    first.destroy();
+
+    const second = try testRuntime(tmp.dir);
+    defer second.destroy();
+    const fp_second = second.ctx.document.fingerprint();
+    var second_info: abi.PreviewInfo = undefined;
+    try std.testing.expectEqual(abi.Status.ok, cutrans_vm_preview_info(second, fp_second, &second_info));
+    try @import("vne").preview.validateInfo(second_info);
+    try std.testing.expect(first_info.epoch_hi != second_info.epoch_hi or first_info.epoch_lo != second_info.epoch_lo);
+}
+
+test "native preview ABI returns one bounded frame and rejects stale or short reads" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const runtime = try testRuntime(tmp.dir);
+    defer runtime.destroy();
+    runtime.ctx.document.width = 7;
+    runtime.ctx.document.height = 5;
+    const fingerprint = runtime.ctx.document.fingerprint();
+    try std.testing.expect(fingerprint != 0);
+
+    var info: abi.PreviewInfo = undefined;
+    try std.testing.expectEqual(abi.Status.invalid_arguments, cutrans_vm_preview_info(runtime, 0, &info));
+    try std.testing.expectEqual(abi.Status.invalid_state, cutrans_vm_preview_info(runtime, fingerprint + 1, &info));
+    try std.testing.expectEqual(abi.Status.ok, cutrans_vm_preview_info(runtime, fingerprint, &info));
+    try @import("vne").preview.validateInfo(info);
+    try std.testing.expectEqual(@as(usize, 7 * 5 * 4), info.bytes_len);
+    try std.testing.expectEqual(fingerprint, info.fingerprint);
+
+    const pixels = try std.testing.allocator.alloc(u8, info.bytes_len);
+    defer std.testing.allocator.free(pixels);
+    var required: usize = 0;
+    try std.testing.expectEqual(abi.Status.buffer_too_small, cutrans_vm_preview_read(runtime, fingerprint, pixels.ptr, pixels.len - 1, &required));
+    try std.testing.expectEqual(info.bytes_len, required);
+    try std.testing.expectEqual(abi.Status.ok, cutrans_vm_preview_read(runtime, fingerprint, pixels.ptr, pixels.len, &required));
+    try std.testing.expectEqual(info.bytes_len, required);
+    try std.testing.expect(std.mem.indexOfNone(u8, pixels, &.{0}) != null);
+
+    runtime.ctx.document.width = 8;
+    try std.testing.expectEqual(abi.Status.invalid_state, cutrans_vm_preview_info(runtime, fingerprint, &info));
 }
 
 test "blocked export computation does not own session or GUI pump and cancellation is durable" {

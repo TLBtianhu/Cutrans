@@ -37,6 +37,18 @@ pub fn stop(allocator: std.mem.Allocator, endpoint: []const u8) !protocol.Snapsh
     return request(allocator, endpoint, .stop);
 }
 
+pub fn prepareStop(allocator: std.mem.Allocator, endpoint: []const u8) !protocol.Snapshot {
+    return request(allocator, endpoint, .prepare_stop);
+}
+
+pub fn cancelJobs(allocator: std.mem.Allocator, endpoint: []const u8) !protocol.Snapshot {
+    return request(allocator, endpoint, .cancel_jobs);
+}
+
+pub fn resume_work(allocator: std.mem.Allocator, endpoint: []const u8) !protocol.Snapshot {
+    return request(allocator, endpoint, .resume_work);
+}
+
 pub const Request = struct {
     allocator: std.mem.Allocator,
     connection: control.Connection,
@@ -124,9 +136,14 @@ pub const Server = struct {
 
     pub fn ready(self: *Server, document_fingerprint: u64) !void {
         if (self.current.state != .starting) return error.InvalidHostState;
+        const previous_fingerprint = self.current.document_fingerprint;
         self.current.document_fingerprint = document_fingerprint;
         self.current.state = .running;
-        try self.persist();
+        self.persist() catch |err| {
+            self.current.state = .starting;
+            self.current.document_fingerprint = previous_fingerprint;
+            return err;
+        };
     }
 
     pub fn snapshot(self: *Server, document_fingerprint: u64, present_count: u64) protocol.Snapshot {
@@ -136,16 +153,35 @@ pub const Server = struct {
     }
 
     pub fn beginStop(self: *Server) !void {
+        if (self.current.state == .stopping) return;
         if (self.current.state != .running and self.current.state != .degraded) return error.InvalidHostState;
+        const previous = self.current.state;
         self.current.state = .stopping;
-        try self.persist();
+        self.persist() catch |err| {
+            self.current.state = previous;
+            return err;
+        };
+    }
+
+    pub fn resume_work(self: *Server) !void {
+        if (self.current.state != .stopping) return error.InvalidHostState;
+        self.current.state = .running;
+        self.persist() catch |err| {
+            self.current.state = .stopping;
+            return err;
+        };
     }
 
     pub fn completeStop(self: *Server) !void {
         if (self.current.state != .stopping) return error.InvalidHostState;
+        const previous_abnormal = self.current.last_shutdown_abnormal;
         self.current.state = .stopped;
         self.current.last_shutdown_abnormal = false;
-        try self.persist();
+        self.persist() catch |err| {
+            self.current.state = .stopping;
+            self.current.last_shutdown_abnormal = previous_abnormal;
+            return err;
+        };
     }
 
     pub fn failStop(self: *Server) !void {
@@ -198,4 +234,26 @@ test "host lifecycle records normal stops and abnormal recovery without a pid he
     try std.testing.expect(!stopped.last_shutdown_abnormal);
     try std.testing.expectEqual(@as(u64, 2), stopped.boot_id);
     try std.testing.expectEqual(@as(u64, 42), stopped.document_fingerprint);
+}
+
+test "invalid lifecycle transitions leave the current state intact" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    var server = try Server.init(std.testing.allocator, std.testing.io, root, .portable);
+    defer server.deinit();
+    try server.ready(7);
+    try std.testing.expectError(error.InvalidHostState, server.resume_work());
+    try std.testing.expectEqual(protocol.State.running, server.current.state);
+    try server.beginStop();
+    try std.testing.expectEqual(protocol.State.stopping, server.current.state);
+    try std.testing.expectError(error.InvalidHostState, server.ready(8));
+    try std.testing.expectEqual(protocol.State.stopping, server.current.state);
+    try server.resume_work();
+    try std.testing.expectEqual(protocol.State.running, server.current.state);
+    try server.beginStop();
+    try server.completeStop();
+    const stopped = try readPersisted(std.testing.allocator, std.testing.io, root, .portable);
+    try std.testing.expectEqual(protocol.State.stopped, stopped.state);
 }

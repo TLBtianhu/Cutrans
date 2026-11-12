@@ -4,12 +4,14 @@ const std = @import("std");
 const types = @import("types.zig");
 const metal = @import("gpu.zig");
 const glass = @import("glass.zig");
+const xform = @import("paint_xform.zig");
 const text_mod = @import("text.zig");
 const native_windows = @import("dwrite.zig").enabled;
 const rich = text_mod.rich;
 const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 const none = ctx_mod.none;
+const skirt = @import("retain.zig").skirt;
 
 pub fn paint(c: *Context, out: *std.ArrayList(metal.Instance)) void {
     out.clearRetainingCapacity();
@@ -39,20 +41,26 @@ fn snap(v: f32, scale: f32) f32 {
     return @round(v * scale) / scale;
 }
 
+fn halfTowardZero(v: f32) f32 {
+    return if (v >= 0) @ceil(v - 0.5) else @floor(v + 0.5);
+}
+
 fn push(c: *Context, out: *std.ArrayList(metal.Instance), inst: metal.Instance) void {
     out.append(c.gpa, inst) catch {};
 }
 
 /// A canvas's shapes, moved to its box and clipped to it; those wholly
-/// outside what shows of it are left out.
-fn paintCanvas(c: *Context, out: *std.ArrayList(metal.Instance), cv: *const @import("draw.zig").Canvas, r: types.Rect, visible: types.Rect, opacity: f32) void {
-    const clip = metal.clip4(visible);
+/// outside what shows of it (including the 128pt retained-scroll skirt) are left out.
+fn paintCanvas(c: *Context, out: *std.ArrayList(metal.Instance), cv: *const @import("draw.zig").Canvas, r: types.Rect, visible: types.Rect, clip4: [4]f32, skirt4: [4]f32, opacity: f32) void {
+    const box_clip = metal.clip4(visible);
     out.ensureUnusedCapacity(c.gpa, cv.shapes.items.len) catch return;
     for (cv.shapes.items) |shape| {
         var i = shape;
         i.rect[0] += r.x;
         i.rect[1] += r.y;
-        if (i.rect[0] > clip[2] or i.rect[1] > clip[3] or i.rect[0] + i.rect[2] < clip[0] or i.rect[1] + i.rect[3] < clip[1]) continue;
+        if (i.rect[0] > skirt4[2] or i.rect[1] > skirt4[3] or i.rect[0] + i.rect[2] < skirt4[0] or i.rect[1] + i.rect[3] < skirt4[1]) continue;
+        const inside_r = i.rect[0] >= r.x - 4 and i.rect[1] >= r.y - 4 and i.rect[0] + i.rect[2] <= r.x + r.w + 8 and i.rect[1] + i.rect[3] <= r.y + r.h + 8;
+        if (!inside_r and (i.rect[0] > box_clip[2] or i.rect[1] > box_clip[3] or i.rect[0] + i.rect[2] < box_clip[0] or i.rect[1] + i.rect[3] < box_clip[1])) continue;
         if (i.kind == metal.Kind.segment or i.kind == metal.Kind.triangle) {
             i.uv[0] += r.x;
             i.uv[1] += r.y;
@@ -65,23 +73,51 @@ fn paintCanvas(c: *Context, out: *std.ArrayList(metal.Instance), cv: *const @imp
         }
         i.color[3] *= opacity;
         i.border_color[3] *= if (i.kind == metal.Kind.quad) opacity else 1;
-        i.clip = clip;
+        i.clip = if (inside_r) clip4 else box_clip;
         out.appendAssumeCapacity(i);
     }
 }
 
+/// The pixels a picture needs along its longest side: only part of it in
+/// the box means the whole of it larger, to stay as sharp.
+fn imageSide(im: ctx_mod.Content.Image, rect: [4]f32, scale: f32) u32 {
+    const w = rect[2] / @max(im.part[2] - im.part[0], 0.01);
+    const h = rect[3] / @max(im.part[3] - im.part[1], 0.01);
+    return @intFromFloat(@max(1, @min(1e6, @ceil(@max(w, h) * scale))));
+}
+
+/// The part `p` (0 to 1) of a picture at `uv` in the atlas.
+fn partOf(uv: [4]f32, p: [4]f32) [4]f32 {
+    const w = uv[2] - uv[0];
+    const h = uv[3] - uv[1];
+    return .{ uv[0] + w * p[0], uv[1] + h * p[1], uv[0] + w * p[2], uv[1] + h * p[3] };
+}
+
 /// `scrolled`: how far the scrolling boxes it's in have scrolled it up.
-fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip: types.Rect, opacity_in: f32, selectable_in: bool, scrolled: f32) void {
-    const n = c.node(index).*;
+fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_in: types.Rect, opacity_in: f32, selectable_in: bool, scrolled: f32) void {
+    // Painting never changes the tree: borrow the node rather than copying
+    // its entire style and content for every row, including clipped ones.
+    const n: *const ctx_mod.Node = c.node(index);
     const st = n.style;
     // A higher layer is drawn later, over the page.
     if (st.layer > 0 and index != c.layer_root) {
         c.layers.append(c.gpa, index) catch {};
         return;
     }
+    // Transformed, it is worked out where it was and moved after: what shows
+    // of the clip is what comes back to the clip. Flattened, it draws nothing.
+    const clip = if (st.transform) |m| xform.clipBefore(m, clip_in) orelse return else clip_in;
+    const hits_from = c.next_hits.items.len;
     const selectable = (selectable_in or st.selectable) and !st.control;
     const r = n.rect;
     const visible = r.intersect(clip);
+    const skirt_clip: types.Rect = .{
+        .x = clip.x,
+        .y = clip.y - skirt,
+        .w = clip.w,
+        .h = clip.h + skirt * 2,
+    };
+    const painted = r.intersect(skirt_clip);
     const total_opacity = opacity_in * st.opacity;
     if (total_opacity <= 0.001) return;
     const open_group = st.group and total_opacity < 0.999 and !c.painting_group;
@@ -123,7 +159,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
     // What the box and its subtree emit, for `Style.scale`.
     const start = out.items.len;
 
-    if (visible.w > 0 and visible.h > 0) {
+    if (painted.w > 0 and painted.h > 0) {
         if (st.shadow) |sh| paintShadow(c, out, sh, r, rad, opacity, clip4);
         for (st.shadows) |sh| paintShadow(c, out, sh, r, rad, opacity, clip4);
         // Glass takes the background's place.
@@ -136,11 +172,12 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
             .border_width = if (st.border != null) st.border_width else 0,
             .radius = rad,
             // A quad's uv is free: its x marks a dashed border.
-            .uv = .{ if (st.border_dashed) 1 else 0, 0, 0, 0 },
+            // and its y a gradient (`gpu.gradientUv`).
+            .uv = if (fill != null and st.gradient_stops.len > 0) gradientStops(c, &st, rect4, opacity) else metal.gradientUv(st.border_dashed, if (fill != null and st.gradient != null) st.gradient.?.alpha(opacity) else null),
             .clip = clip4,
         });
         switch (n.content) {
-            .text => |*t| paintText(c, out, index, &n, t, clip4, opacity, selectable, moving),
+            .text => |*t| paintText(c, out, index, n, t, clip4, opacity, selectable, moving),
             .icon => |ic| if (c.text.atlas.symbol(ic.name, ic.size, @backingInt(ic.weight))) |sp| {
                 // Centered in its box, which may be larger (a fixed frame).
                 const inner = r.inset(st.padding);
@@ -156,12 +193,12 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
                     .clip = clip4,
                 });
             },
-            .image => |im| if (c.text.images.get(im.key, im.source, @intFromFloat(@max(1, @ceil(@max(rect4[2], rect4[3]) * c.scale))))) |e| push(c, out, .{
+            .image => |im| if (c.text.images.get(im.key, im.source, imageSide(im, rect4, c.scale))) |e| push(c, out, .{
                 .rect = if (im.snap) .{ snap(r.x, c.scale), snap(r.y, c.scale), r.w, r.h } else rect4,
                 .color = .{ 1, 1, 1, im.opacity * opacity },
                 // A tint (alpha above 0) fills the picture's shape instead.
                 .border_color = if (im.tint) |t| metal.color4(t) else .{ 0, 0, 0, 0 },
-                .uv = e.uv,
+                .uv = partOf(e.uv, im.part),
                 .radius = rad,
                 .kind = metal.Kind.image,
                 .clip = clip4,
@@ -174,13 +211,20 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
                 .kind = metal.Kind.texture,
                 .border_width = @floatFromInt(tx.slot),
                 .clip = clip4,
+                // A texture's border colour is free: it carries its linear
+                // map (`gpu.affine`), about the pivot set here, which the
+                // rotation below then leaves as it is.
+                .border_color = tx.affine,
+                .xf = if (std.mem.eql(f32, &tx.affine, &.{ 0, 0, 0, 0 })) .{ 0, 0, 0, 0 } else .{ st.rotation, st.spin, r.x + r.w * st.rotation_anchor.x, r.y + r.h * st.rotation_anchor.y },
             }),
             .hole => |radius| push(c, out, .{ .rect = rect4, .color = .{ 0, 0, 0, 1 }, .radius = radius, .kind = metal.Kind.hole, .clip = clip4 }),
-            .canvas => |cv| paintCanvas(c, out, cv, r, visible, opacity),
+            .canvas => |cv| paintCanvas(c, out, cv, r, visible, clip4, metal.clip4(painted), opacity),
             .none => {},
         }
     }
-    if (n.interactive and visible.w > 0 and visible.h > 0) c.addHit(n.id, index, visible, false);
+    if (n.interactive and painted.w > 0 and painted.h > 0) c.addHit(n.id, index, visible, false);
+    // Each axis routes through the same clipped, paint-ordered regions.
+    if (st.scroll_x and visible.w > 0 and visible.h > 0) c.next_hits.append(c.gpa, .{ .id = n.id, .index = index, .rect = visible, .scroll = false, .scroll_x = true }) catch {};
     // Over the scrolling boxes behind it, never hot itself.
     if (st.wheel and visible.w > 0 and visible.h > 0) c.next_hits.append(c.gpa, .{ .id = n.id, .index = index, .rect = visible, .scroll = true, .wheel = true }) catch {};
 
@@ -194,14 +238,15 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
     var child = n.first_child;
     const inner_scrolled = scrolled + if (st.scroll) c.scroll.get(n.id) orelse 0 else 0;
     while (child != none) : (child = c.node(child).next) paintNode(c, out, child, child_clip, opacity, selectable, inner_scrolled);
-    if ((st.clip or st.scroll or st.scroll_x) and st.radius > 0) roundClip(out.items[first..], r, visible, st.radius);
+    if ((st.clip or st.scroll or st.scroll_x) and st.radius > 0) roundClip(out.items[first..], r, visible, st.radius, st.clip_corners);
 
     if (st.scroll and st.scrollbar == .overlay) {
-        paintScrollbar(c, out, n, visible, opacity);
+        paintScrollbar(c, out, n.*, visible, opacity);
     } else if (st.scroll or st.scroll_x) {
-        @import("scroll.zig").paintScrollbars(c, out, n, visible, opacity);
+        @import("scroll.zig").paintScrollbars(c, out, n.*, visible, opacity);
     }
     if (st.scale != 1) scaleItems(out.items[start..], r, @max(st.scale, 0), st.scale_anchor, clip4);
+    if (st.transform) |m| xform.apply(out.items[start..], c.next_hits.items[hits_from..], m, clip_in);
     if (st.layout_motion != 0) {
         // Where the layout put it, scrolling aside: a scroll isn't a move.
         var placed = r;
@@ -278,7 +323,7 @@ fn scaleItems(items: []metal.Instance, box: types.Rect, s: f32, anchor: types.Po
         i.radius *= s;
         // A border's width, a shadow's blur, a pane's backdrop blur.
         i.border_width *= s;
-        if (i.kind == metal.Kind.shadow_out) i.uv = .{ i.uv[0] * s, i.uv[1] * s, 0, 0 };
+        if (i.kind == metal.Kind.shadow_out) i.uv = .{ i.uv[0] * s, i.uv[1] * s, i.uv[2] * s, 0 };
         const round = metal.clipCorners(i.clip_round);
         if (round.corners != 0) i.clip_round = metal.clipRound(round.radius * s, round.corners);
     }
@@ -304,12 +349,14 @@ fn paintText(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, n: *c
 
 fn paintShadow(c: *Context, out: *std.ArrayList(metal.Instance), sh: types.Shadow, r: types.Rect, radius: f32, opacity: f32, clip4: [4]f32) void {
     const s = sh.spread;
+    // A square corner stays square; a round one grows and keeps its kind.
+    const round: f32 = if (radius == 0) 0 else @max(0, @abs(radius) + s);
     push(c, out, .{
         .rect = .{ r.x + sh.x - s, r.y + sh.y - s, @max(0, r.w + 2 * s), @max(0, r.h + 2 * s) },
         .color = metal.color4(sh.color.alpha(opacity)),
         // A knocked out shadow is cut by the box, where it is from the shadow.
-        .uv = if (sh.knockout) .{ -sh.x, -sh.y, 0, 0 } else .{ 0, 0, 0, 0 },
-        .radius = @max(0, radius + s),
+        .uv = if (sh.knockout) .{ -sh.x, -sh.y, s, 0 } else .{ 0, 0, 0, 0 },
+        .radius = if (radius < 0) -round else round,
         // CSS's blur radius is twice the Gaussian's standard deviation.
         .border_width = sh.blur / 2,
         .kind = if (sh.knockout) metal.Kind.shadow_out else metal.Kind.shadow,
@@ -372,28 +419,33 @@ fn textRunLimit(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Con
                 g.value_ptr.* = count;
             };
         };
-        return;
+        if (y > clip4[3] + skirt or y + lh < clip4[1] - skirt or x > clip4[2]) return;
     }
     const styled = t.spans.len > 0 and rich.styled(t.spans);
     const lay = t.cut_lay orelse if (styled) rich.layout(c.text, t.str[start..end], style, t.spans, start) else c.text.layout(t.str[start..end], style);
     if (lay.glyphs.len == 0 or x + lay.width < clip4[0]) return;
     const scale = c.scale;
     // The line's extra height (its leading) goes half above, half below.
-    const raw_baseline = y + (lh - f.lineHeight()) / 2 + f.leading / 2 + f.ascent;
-    const baseline = if (moving) raw_baseline else snap(raw_baseline, scale);
+    const gpui_snap = c.text.glyph_snap == .half_toward_zero;
+    const raw_baseline = if (c.text.baseline_rule == .glyph_box and lh != f.lineHeight())
+        y + (lh - f.ascent - f.descent) / 2 + f.ascent
+    else
+        y + (lh - f.lineHeight()) / 2 + f.leading / 2 + f.ascent;
+    const baseline = if (gpui_snap) halfTowardZero(raw_baseline * scale) / scale else if (moving) raw_baseline else snap(raw_baseline, scale);
     const base = metal.color4(t.color.alpha(opacity));
-    if (sel) |s| @import("selection.zig").line(c, out, s.id, s.index, t.str, start, end, lay, x, y, lh, s.x0, s.x1, clip4);
-    if (t.spans.len > 0) decorations(c, out, &t, lay, start, end, x, baseline, f, clip4, opacity);
+    if (sel) |s| if (y <= clip4[3] and y + lh >= clip4[1]) @import("selection.zig").line(c, out, s.id, s.index, t.str, start, end, lay, x, y, lh, s.x0, s.x1, clip4);
+    if (t.spans.len > 0) @import("paint_decor.zig").decorations(c, out, &t, lay, start, end, x, .{ .top = y, .h = lh, .baseline = baseline }, f, clip4, opacity);
     var span_i: usize = 0;
     for (lay.glyphs) |g| {
         const pen = (x + g.x) * scale;
         if (pen / scale > clip4[2]) break;
         if (limit) |l| if (pen / scale >= l.end) break;
         const positions: f32 = if (native_windows) @floatFromInt(c.text.positions(g)) else text_mod.subpixel_bins;
-        const quantized = if (native_windows) @round(pen * positions) / positions else pen;
+        // DirectWrite keeps its per-face phase count (including grid fitting).
+        const quantized = if (gpui_snap) halfTowardZero(pen * positions) / positions else if (native_windows) @round(pen * positions) / positions else pen;
         const px = @floor(quantized);
         const phase = (quantized - px) * text_mod.subpixel_bins;
-        const bin: u8 = @intFromFloat(@min(text_mod.subpixel_bins - 1, if (native_windows) @round(phase) else @floor(phase)));
+        const bin: u8 = @intFromFloat(@min(text_mod.subpixel_bins - 1, if (native_windows) @round(phase) else @floor(phase + if (gpui_snap) @as(f32, 0.001) else 0)));
         var color = base;
         var tone = t.color;
         if (t.spans.len > 0) {
@@ -435,48 +487,11 @@ fn textRunLimit(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Con
     }
 }
 
-/// The x of the first glyph at or after byte `at` of the line, else its end.
-fn xAt(lay: text_mod.Layout, at: usize) f32 {
-    for (lay.glyphs) |g| if (g.index >= at) return g.x;
-    return lay.width;
-}
-
-/// What spans draw besides their glyphs: backgrounds (inline code, marks)
-/// behind the text, underlines (links) and lines through.
-fn decorations(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_mod.Content.Text, lay: text_mod.Layout, start: usize, end: usize, x: f32, baseline: f32, f: text_mod.Font, clip4: [4]f32, opacity: f32) void {
-    for (t.spans) |sp| {
-        if (sp.end <= start or sp.start >= end) continue;
-        if (sp.background == null and !sp.underline and !sp.strike) continue;
-        const a = @max(sp.start, start) - start;
-        const b = @min(sp.end, end) - start;
-        const x0 = x + xAt(lay, a);
-        const x1 = x + xAt(lay, b);
-        if (x1 <= x0) continue;
-        const color = sp.color orelse t.color;
-        if (sp.background) |bg| push(c, out, .{
-            .rect = .{ x0 - 3, baseline - f.ascent * 0.92 - 2, x1 - x0 + 6, (f.ascent + f.descent) * 0.92 + 4 },
-            .color = metal.color4(bg.alpha(opacity)),
-            .radius = 4,
-            .clip = clip4,
-        });
-        if (sp.underline) push(c, out, .{
-            .rect = .{ x0, baseline + 2, x1 - x0, 1 },
-            .color = metal.color4(color.alpha(0.6 * opacity)),
-            .clip = clip4,
-        });
-        if (sp.strike) push(c, out, .{
-            .rect = .{ x0, baseline - f.ascent * 0.32, x1 - x0, 1 },
-            .color = metal.color4(color.alpha(opacity)),
-            .clip = clip4,
-        });
-    }
-}
-
 /// What a box with rounded corners clips is cut by its corners too: each
 /// instance it clipped whose clip shares one of the box's corners (one the
 /// box's own clip didn't cut off) has that corner rounded. A clip within
 /// keeps its own rounding.
-fn roundClip(items: []metal.Instance, box: types.Rect, visible: types.Rect, radius: f32) void {
+fn roundClip(items: []metal.Instance, box: types.Rect, visible: types.Rect, radius: f32, allowed: u4) void {
     const near = struct {
         fn f(a: f32, b: f32) bool {
             return @abs(a - b) < 0.01;
@@ -491,6 +506,7 @@ fn roundClip(items: []metal.Instance, box: types.Rect, visible: types.Rect, radi
     if (near(v[2], b[2]) and near(v[1], b[1])) whole |= 2;
     if (near(v[2], b[2]) and near(v[3], b[3])) whole |= 4;
     if (near(v[0], b[0]) and near(v[3], b[3])) whole |= 8;
+    whole &= allowed;
     if (whole == 0) return;
     for (items) |*i| {
         const k = i.clip;
@@ -559,4 +575,13 @@ fn paintScrollbar(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.N
         .radius = 2,
         .clip = metal.clip4(visible),
     });
+}
+
+/// A box's gradient of many stops into the frame's gradients, its uv
+/// pointing at them (`gpu.gradientStopsUv`).
+fn gradientStops(c: *Context, st: *const types.Style, rect4: [4]f32, opacity: f32) [4]f32 {
+    const stops = st.gradient_stops[0..@min(st.gradient_stops.len, 16)];
+    const anchor = st.gradient_anchor orelse types.Rect{ .x = 0, .y = 0, .w = rect4[2], .h = rect4[3] };
+    const at = metal.gradientData(c.gpa, &c.gradients, stops, anchor.y, anchor.h, opacity) catch return metal.gradientUv(st.border_dashed, null);
+    return metal.gradientStopsUv(st.border_dashed, at, stops.len);
 }

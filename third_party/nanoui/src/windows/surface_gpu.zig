@@ -14,7 +14,6 @@ const surface = @import("surface.zig");
 const Surface = surface.Surface;
 const Window = @import("window.zig").Window;
 const clock = @import("../ui/clock.zig");
-const frame_timing = @import("frame_timing.zig");
 
 /// Whether this frame may go through D3D at all: the window is opaque and no
 /// device failure is known. A layered window's alpha (`opacity` below 1) is
@@ -37,6 +36,8 @@ pub fn paintGpu(self: *Surface, h: w.HWND) bool {
             nameCpu(self);
             return false;
         };
+        // The beat is this swap chain's monitor's from now on.
+        @import("surface_pace.zig").updateOutput(self);
     }
     const p = &self.presenter.?;
     // The drag state is set before the size is given to the swap chain: a drag
@@ -70,7 +71,12 @@ pub fn paintGpu(self: *Surface, h: w.HWND) bool {
     const draw_w: f32 = @as(f32, @floatFromInt(p.width)) / self.scale;
     const draw_h: f32 = @as(f32, @floatFromInt(p.height)) / self.scale;
     const draw_size: types.Size = .{ .w = @min(self.size.w, draw_w), .h = @min(self.size.h, draw_h) };
-    g.draw(self.instances.items, self.ctx.textures.items, draw_size, self.scale, bg, @ptrCast(back));
+    // The frame's textures (`ui.texture`): uploaded into their slots and
+    // sampled by the texture instances, as the CPU path draws them.
+    g.textures = self.ctx.textures.items;
+    const t_draw = clock.now();
+    g.draw(self.instances.items, draw_size, self.scale, bg, @ptrCast(back));
+    const t_present = clock.now();
     // The view asks for the present mode; it can change between frames.
     p.vsync = self.ctx.vsync;
     if (self.dump_enabled and self.dumps == 0) {
@@ -80,11 +86,13 @@ pub fn paintGpu(self: *Surface, h: w.HWND) bool {
         dumpGpuFrame(self, g);
     }
     const ok = p.present();
+    @import("surface_pace.zig").logDraw(self, (t_present - t_draw) * 1000, (clock.now() - t_present) * 1000, p.vsync);
     self.trace("gpu paint: {d}x{d} px, chain {d}x{d}, {d} draws, present 0x{x:0>8} ok={}", .{ pw, ph, p.width, p.height, self.instances.items.len, p.last_hr, ok });
     if (!ok) {
         // The device was lost: both go, and a new pair gets the frame.
         std.log.warn("nanoui: present failed (0x{x:0>8}): the device and swap chain are made again", .{p.last_hr});
         release(self);
+        @import("../ui/d3d11_device.zig").checkLost();
         _ = w.InvalidateRect(h, null, 0);
     }
     return true;
@@ -150,6 +158,7 @@ pub fn present(self: *Surface, h: w.HWND) bool {
         std.log.warn("nanoui: presenting the canvas failed (0x{x:0>8}): the chain is made again", .{p.last_hr});
         p.deinit();
         self.presenter = null;
+        @import("../ui/d3d11_device.zig").checkLost();
         _ = w.InvalidateRect(h, null, 0);
     }
     return true;
@@ -158,7 +167,7 @@ pub fn present(self: *Surface, h: w.HWND) bool {
 /// What the last frame drew, for the damage the CPU path reports to GDI.
 pub fn shown(self: *Surface) canvas.Frame {
     const clear = if (self.window.transparent) types.Color.transparent else self.ctx.theme.background;
-    return .{ .instances = self.instances.items, .text = &self.text, .clear = clear, .size = self.size, .scale = self.scale, .textures = self.ctx.textures.items };
+    return .{ .instances = self.instances.items, .text = &self.text, .clear = clear, .size = self.size, .scale = self.scale, .textures = self.ctx.textures.items, .gradients = self.ctx.gradients.items };
 }
 
 /// A transparent window's frame: drawn by the canvas (only what changed)
@@ -191,13 +200,11 @@ pub fn invalidate(self: *Surface) void {
 /// One WM_PAINT: the GPU when it can and the window is opaque, else the
 /// canvas and a GDI copy. `WM_PAINT` arrives only when something invalidated,
 /// and `BeginPaint` clears the region: painting is the frame's output.
-pub fn notifyPresent(window: *Window) void {
+fn notifyPresent(window: *Window) void {
     if (window.on_present) |callback| callback.func(callback.ctx, window);
 }
 
 pub fn paint(self: *Surface, h: w.HWND) void {
-    const logging = self.frame_log != null;
-    const t_paint = if (logging) clock.now() else 0;
     var ps: w.PAINTSTRUCT = undefined;
     const dc = w.BeginPaint(h, &ps) orelse return;
     defer _ = w.EndPaint(h, &ps);
@@ -242,23 +249,15 @@ pub fn paint(self: *Surface, h: w.HWND) void {
     // canvas draws the frame and GDI copies the pixels into the layered
     // window, which does show the alpha; at 1 the GPU is picked back up.
     if (wantsGpu(self) and paintGpu(self, h)) {
-        // The GPU drew the whole frame: no canvas, so the presentation is
-        // everything from here to `EndPaint`.
-        painted(self, logging, t_paint, t_paint);
         notifyPresent(self.window);
         return;
     }
     self.pixels.draw(self.gpa, shown(self));
-    const t_raster = if (logging) clock.now() else 0;
     const px = &self.pixels;
-    if (px.bytes.len == 0) {
-        painted(self, logging, t_paint, t_raster);
-        return;
-    }
+    if (px.bytes.len == 0) return;
     // The swap chain can show the canvas's pixels too — but never on a
     // layered window, for the same reason `paintGpu` stands down above.
     if (wantsGpu(self) and present(self, h)) {
-        painted(self, logging, t_paint, t_raster);
         notifyPresent(self.window);
         return;
     }
@@ -266,15 +265,6 @@ pub fn paint(self: *Surface, h: w.HWND) void {
     // GDI copies only what was invalidated.
     const info: w.BITMAPINFOHEADER = .{ .biWidth = @intCast(px.width), .biHeight = -@as(i32, @intCast(px.height)) };
     _ = w.SetDIBitsToDevice(dc, 0, 0, @intCast(px.width), @intCast(px.height), 0, 0, 0, @intCast(px.height), px.bytes.ptr, &info, 0);
-    painted(self, logging, t_paint, t_raster);
-}
-
-/// Gives the pending frame record its canvas and presentation times, when a
-/// frame log is running. `BeginPaint` and `EndPaint` stay outside both, as
-/// they were outside the frame.
-fn painted(self: *Surface, logging: bool, t_paint: f64, t_raster: f64) void {
-    if (!logging) return;
-    if (self.frame_log) |*fl| frame_timing.Timing.painted(&self.timing, fl, t_paint, t_raster);
 }
 
 /// `NANOUI_DUMP`, on F12: draws the frame whole beside what the canvas
@@ -288,6 +278,7 @@ pub fn verify(self: *Surface) void {
     const whole: gpu.Pixels = .{ .bytes = whole_bytes, .width = px.width, .height = px.height };
     var pictures = self.text.images.pictures();
     pictures.textures = self.ctx.textures.items;
+    pictures.gradients = self.ctx.gradients.items;
     raster.draw(whole, self.instances.items, self.text.atlas.mask(), pictures, self.scale, self.ctx.theme.background);
     var differ: usize = 0;
     for (whole_bytes, px.bytes) |a, b| {

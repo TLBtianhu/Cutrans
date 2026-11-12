@@ -45,6 +45,19 @@ pub fn scrollMoved(c: *Context, id: u64) bool {
     return c.scroll_moved.contains(id);
 }
 
+/// Whether the topmost scrolling box under the pointer reads the wheel
+/// itself (`Style.wheel`): it gets the wheel's vertical deltas in
+/// `input.scroll`, as a view that sets `wants_wheel` does.
+pub fn wheelAt(c: *const Context) bool {
+    var i = c.hits.items.len;
+    while (i > 0) {
+        i -= 1;
+        const h = c.hits.items[i];
+        if (h.scroll and h.rect.contains(c.input.mouse)) return h.wheel;
+    }
+    return false;
+}
+
 /// Scrolls the innermost scrolling box under the pointer.
 pub fn applyScroll(c: *Context, dy: f32) bool {
     var i = c.hits.items.len;
@@ -58,6 +71,7 @@ pub fn applyScroll(c: *Context, dy: f32) bool {
             if (!gop.found_existing) gop.value_ptr.* = 0;
             if (!isHolding(c)) {
                 gop.value_ptr.* = @max(0, gop.value_ptr.* - dy);
+                if (dy != 0) c.retain.scroll_delta = true;
                 return true;
             }
             const ov_gop = c.overscroll.getOrPut(c.gpa, h.id) catch return false;
@@ -87,6 +101,7 @@ pub fn applyScroll(c: *Context, dy: f32) bool {
             }
             gop.value_ptr.* = cur;
             ov_gop.value_ptr.* = over;
+            if (dy != 0 and @abs(over) <= 0.05) c.retain.scroll_delta = true;
             motion.jump(c, h.id, salt_overscroll, over);
             return true;
         }

@@ -1,10 +1,10 @@
 //! export_job.zig — 一次协作式 PNG 导出的不可变输入
 
 const std = @import("std");
-const documents = @import("documents.zig");
+const documents = @import("vne").documents;
 const tasks = @import("tasks.zig");
 const workspace = @import("vne").workspace;
-const command = @import("command.zig");
+const command = @import("vne").command;
 
 pub const max_path = 1024;
 pub const Phase = enum { queued, running, prepared, output_committed, succeeded, failed, cancelled, interrupted };

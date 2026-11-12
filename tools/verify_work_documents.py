@@ -29,7 +29,7 @@ from verify_resource_versions import (COLOR_A, COLOR_B, assert_output, document_
 from verify_workspace import Stamp
 from verify_workspace_rpc import Pipe, Workspace
 
-VERSION = 3
+VERSION = 4
 CREATE, SAVE_DRAFT, COMMIT, DISCARD = 1, 2, 3, 4
 SNAPSHOT_SIZE, OUTCOME_SIZE, REQUEST_HEADER = 144, 104, 80
 
@@ -164,6 +164,33 @@ def fixed_version_case(library, runtime_dir, root, evidence):
         runtime.close()
 
 
+def receipt_ring_case(library, runtime_dir, root, evidence):
+    """A bounded receipt ring must not cap successful work for its lifetime."""
+    case = check_root(root / "receipt-ring")
+    case.mkdir()
+    runtime = WorkClient(library, runtime_dir, case / "data", evidence)
+    try:
+        created = runtime.submit_work(request(1, CREATE, label=b"ring.txt", body=b"base"))
+        require(created.resource_id == 1 and created.work_revision == 1, "ring fixture creation failed")
+        draft = 0
+        last = None
+        for index in range(70):
+            body = f"draft-{index}".encode()
+            last = runtime.submit_work(request(2 + index, SAVE_DRAFT, 1, 1, draft, body=body))
+            draft = last.draft_revision
+        require(last is not None and last.status == OK and draft != 0, "work stopped accepting drafts at the receipt boundary")
+        metadata, body = runtime.work_snapshot(1)
+        require(metadata.draft_revision == draft and body == b"draft-69", "latest draft was lost after ring eviction")
+        committed = runtime.submit_work(request(72, COMMIT, 1, 0, draft))
+        require(committed.work_revision == 2 and committed.draft_revision == 0, "commit after ring eviction failed")
+        evicted = runtime.submit_work(request(2, SAVE_DRAFT, 1, 2, 0, body=b"evicted"), expected=67, disposition=3)
+        require(evicted.status == 67, "an evicted sequence was not refused as expired")
+        require(runtime.work_snapshot(1)[1] == b"draft-69", "an evicted sequence executed again")
+        evidence["checks"].append("bounded_receipt_ring_keeps_work_usable_and_refuses_evicted_sequences")
+    finally:
+        runtime.close()
+
+
 def host_request(value):
     label, body = value.label, value.body
     label_bytes = c.string_at(label.ptr, label.len) if label.len else b""
@@ -266,10 +293,11 @@ def main():
         library = c.WinDLL(str(portable / "runtime/cutrans_vm_runtime.dll"))
         configure(library)
         fixed_version_case(library, portable / "runtime", root, evidence)
+        receipt_ring_case(library, portable / "runtime", root, evidence)
         host_case(portable / "cutrans_vm.exe", root, evidence)
         require(hashes(portable) == before, "work verification modified the tested artifact")
         evidence["passed"] = True
-        print("CUTRANS_WORK_DOCUMENTS_VERIFY_OK fixed_job=1 draft_commit=1 cold_receipt=1 host_lost_reply=1 host_restart=1")
+        print("CUTRANS_WORK_DOCUMENTS_VERIFY_OK fixed_job=1 draft_commit=1 ring=1 cold_receipt=1 host_lost_reply=1 host_restart=1")
     except BaseException as error:
         evidence["error"] = repr(error)
         raise

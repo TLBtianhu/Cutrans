@@ -1,9 +1,33 @@
 const std = @import("std");
 const abi = @import("vne").abi;
+const library_client = @import("library_client.zig");
 
 fn validateApi(api: *const abi.ShellApi) !void {
     if (!api.isCurrent()) return error.InvalidShellApi;
     if (api.context == null) return error.MissingRuntimeHandle;
+}
+
+/// Register one host file through Resource API v4. The returned id is a VM
+/// library id, not an asset handle; callers must refresh/ensure before use.
+pub fn registerExternal(allocator: std.mem.Allocator, api: *const abi.ShellApi, io: *const std.Io, path: []const u8) !u64 {
+    try validateApi(api);
+    var client = try library_client.Client.init(allocator, api, library_client.NonceSource.secure(io));
+    defer client.deinit();
+    try client.refresh();
+    try client.probe(0, .register_file, path);
+    const settlement = switch (try client.submit()) {
+        .known => |value| value,
+        // Only the original candidate is retried; a lost reply is not a new
+        // registration intent.
+        .unknown => switch (try client.retry()) {
+            .known => |value| value,
+            .unknown => return error.ExternalRegistrationUnknown,
+        },
+    };
+    if (settlement.outcome.status != abi.Status.ok or settlement.outcome.resource_id == 0) {
+        return error.ExternalRegistrationFailed;
+    }
+    return settlement.outcome.resource_id;
 }
 
 pub fn command(api: *const abi.ShellApi, name: []const u8, arg: ?[]const u8) !i32 {

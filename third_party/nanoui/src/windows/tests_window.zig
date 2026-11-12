@@ -312,28 +312,6 @@ test "the sideways wheel reaches the view along x" {
     try testing.expectEqual(@as(f32, 48), p.got_x);
 }
 
-test "the presentation callback receives its owning window" {
-    const gpa = testing.allocator;
-    const app = try makeApp(gpa);
-    defer app.destroy();
-    var p: Page = .{};
-    var c: Counter = .{};
-    const Callback = struct {
-        fn present(ctx: *anyopaque, window: *Window) void {
-            const counter: *Counter = @ptrCast(@alignCast(ctx));
-            counter.n += @intFromBool(window.surface != null);
-        }
-    };
-    const win = try app.newWindow(.{
-        .title = "present callback",
-        .visible = false,
-        .on_present = .{ .ctx = &c, .func = Callback.present },
-        .content = .{ .view = .init(&p, Page.view) },
-    });
-    @import("surface_gpu.zig").notifyPresent(win);
-    try testing.expectEqual(@as(u32, 1), c.n);
-}
-
 test "onMain lands the call on the thread that pumps" {
     const gpa = testing.allocator;
     const app = try makeApp(gpa);
@@ -341,8 +319,32 @@ test "onMain lands the call on the thread that pumps" {
     // The hand-built app skipped the fdwatch window `onMain` posts through.
     _ = @import("fdwatch.zig").prepare() catch return error.SkipZigTest;
     var c: Counter = .{};
-    App.onMain(&c, bump);
+    try testing.expect(App.onMain(&c, bump));
     try testing.expectEqual(@as(u32, 0), c.n);
     loop.runFor(0.2);
     try testing.expectEqual(@as(u32, 1), c.n);
+}
+
+test "runSeconds hands the launch's URLs to on_open_urls, once" {
+    const gpa = testing.allocator;
+    const app = try makeApp(gpa);
+    defer app.destroy();
+    const Got = struct {
+        var calls: usize = 0;
+        var first: [64]u8 = undefined;
+        var len: usize = 0;
+        fn on(_: ?*anyopaque, urls: []const []const u8) void {
+            calls += 1;
+            len = @min(urls[0].len, first.len);
+            @memcpy(first[0..len], urls[0][0..len]);
+        }
+    };
+    app.options.on_open_urls = Got.on;
+    const urls = try gpa.alloc([]u8, 1);
+    urls[0] = try gpa.dupe(u8, "alchemist://open?project=1");
+    app.launch_urls = urls;
+    try app.runSeconds(0.02);
+    try app.runSeconds(0.01);
+    try testing.expectEqual(@as(usize, 1), Got.calls);
+    try testing.expectEqualStrings("alchemist://open?project=1", Got.first[0..Got.len]);
 }

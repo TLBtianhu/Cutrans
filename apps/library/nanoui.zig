@@ -26,7 +26,8 @@ pub fn verifyD3D(tester: *nanoui.ui.Tester, allocator: std.mem.Allocator) !void 
     var renderer = try nanoui.ui.d3d11.Renderer.init();
     defer renderer.deinit();
     renderer.sync(tester.text.atlas.mask(), tester.text.atlas.generation, tester.text.images.pictures(), tester.text.images.generation);
-    renderer.draw(tester.instances.items, tester.ctx.textures.items, tester.size, tester.scale, tester.theme.background, null);
+    renderer.textures = tester.ctx.textures.items;
+    renderer.draw(tester.instances.items, tester.size, tester.scale, tester.theme.background, null);
     const gpu = try renderer.read(allocator);
     defer gpu.deinit(allocator);
     const cpu = try tester.render(allocator);
@@ -72,8 +73,15 @@ pub fn verifyDynamicD3D(allocator: std.mem.Allocator) !void {
 
 fn verify(state: *State, config: *const abi.ShellConfig) !void {
     const resource_dir = try requiredPath(config.resource_dir);
-    const path = try std.fs.path.join(state.allocator, &.{ resource_dir, "assets/examples/pngtest.png" });
+    const packed_path = try std.fs.path.join(state.allocator, &.{ resource_dir, "assets/examples/pngtest.png" });
+    defer state.allocator.free(packed_path);
+    const image_bytes = try std.Io.Dir.cwd().readFileAlloc(state.io.?, packed_path, state.allocator, .limited(16 * 1024 * 1024));
+    defer state.allocator.free(image_bytes);
+    const temp_value = std.c.getenv("TEMP") orelse std.c.getenv("TMP") orelse return error.TempDirectoryUnavailable;
+    const path = try std.fs.path.join(state.allocator, &.{ std.mem.span(temp_value), "pngtest.png" });
     defer state.allocator.free(path);
+    try std.Io.Dir.cwd().writeFile(state.io.?, .{ .sub_path = path, .data = image_bytes });
+    defer std.Io.Dir.cwd().deleteFile(state.io.?, path) catch {};
     std.debug.print("CUTRANS_NANOUI_FIXTURE path={s}\n", .{path});
     const library_id = blk: {
         _ = try state.importExternal(path);
@@ -144,7 +152,10 @@ fn verify(state: *State, config: *const abi.ShellConfig) !void {
     const text_id = state.selected_library;
     try std.testing.expect(text_id != 0 and text_id != library_id and state.work.?.editor != null);
     try state.work.?.editor.?.editor.paste("第一行\r\n第二行");
+    // The UI autosave is idle-debounced; let the frame process the paste, then
+    // force the same flush that a close or Ctrl+S performs.
     tester.frame();
+    try state.work.?.pump(true);
     tester.frame();
     try std.testing.expect(state.work.?.editor.?.draft_revision != 0);
     try std.testing.expectEqual(@as(u64, 1), state.work.?.editor.?.work_revision);
@@ -177,6 +188,7 @@ pub fn run(init: std.process.Init, config: *const abi.ShellConfig, api: *const a
     defer io_state.deinit();
     var state = try State.init(init.gpa, api, io_state.io());
     defer state.deinit();
+    std.debug.print("CUTRANS_ENVIRONMENT_SESSION_OK epoch={x}:{x}\n", .{ state.session.epoch_hi, state.session.epoch_lo });
     if (config.asset_workspace == 1) return verify(&state, config);
 
     const app = try nanoui.App.create(init, .{ .name = "Cutrans", .kv = false });

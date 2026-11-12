@@ -1,7 +1,7 @@
 //! Unpublished document/history change. Persist a borrowed history view first,
 //! then publish the cheap document value and the changed history slot/cursor.
 const std = @import("std");
-const documents = @import("documents.zig");
+const documents = @import("vne").documents;
 const history = @import("history.zig");
 const journal = @import("history_journal.zig");
 const RuntimeContext = @import("context.zig").Context;

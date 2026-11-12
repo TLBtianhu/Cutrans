@@ -7,6 +7,8 @@ pub const Frame = struct {
     height: u32,
     generation: u64,
     pixels: []u8,
+    epoch_hi: u64 = 0,
+    epoch_lo: u64 = 0,
 
     pub fn deinit(self: *Frame, allocator: std.mem.Allocator) void {
         allocator.free(self.pixels);

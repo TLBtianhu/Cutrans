@@ -1,9 +1,47 @@
 const std = @import("std");
-const abi = @import("vne").abi;
-const RuntimeContext = @import("runtime").context.Context;
-const command = @import("runtime").command;
-const documents = @import("runtime").documents;
-const workspace = @import("vne").workspace;
+const vne = @import("vne");
+const abi = vne.abi;
+const command = vne.command;
+const documents = vne.documents;
+const workspace = vne.workspace;
+
+/// Shell-owned projection state. It deliberately contains only mirror/view
+/// fields; it is not a Runtime business context and owns no VM session.
+pub const Context = struct {
+    allocator: std.mem.Allocator,
+    io: ?std.Io = null,
+    paths: vne.paths.Paths = .{},
+    command: vne.command.Registry = undefined,
+    status: vne.status.Status = .{},
+    document: vne.documents.Document = vne.documents.Document.initDefault(),
+    document_revision: u64 = 1,
+    asset_view: vne.assets.View = .{},
+    library_view: vne.library.View = .{},
+    playback_view: vne.playback.View = .{},
+    devices: vne.devices.Table = .{},
+
+    pub fn init(self: *Context, allocator: std.mem.Allocator) void {
+        self.* = .{ .allocator = allocator };
+        self.command.init(allocator, self);
+    }
+
+    pub fn deinit(self: *Context) void {
+        self.command.deinit();
+        self.asset_view.deinit(self.allocator);
+        self.library_view.deinit(self.allocator);
+        self.devices.reset();
+        self.paths.deinit(self.allocator);
+        self.status.clear();
+        self.document = vne.documents.Document.initDefault();
+        self.document_revision = 1;
+        self.io = null;
+    }
+};
+
+const RuntimeContext = Context;
+
+pub const Frame = vne.frame.Frame;
+pub const Paths = vne.paths.Paths;
 
 const Projection = enum { document, playback, library, assets };
 
@@ -35,6 +73,7 @@ const Client = struct {
 };
 
 var client: Client = .{};
+var reconnect_cooldown: u8 = 0;
 
 pub fn documentFresh() bool {
     return client.initialized and client.mirror_errors[@backingInt(Projection.document)] == null;
@@ -80,11 +119,13 @@ pub fn init(api: *const abi.ShellApi) !void {
     if (api.workspace_api(api.context, &authority) != abi.Status.ok) return error.WorkspaceApiUnavailable;
     if (authority.struct_size < @sizeOf(workspace.Api) or authority.api_version != workspace.version or authority.context == null) return error.InvalidWorkspaceApi;
     client = .{ .api = api.*, .workspace_api = authority };
+    reconnect_cooldown = 0;
 }
 
 pub fn deinit() void {
     if (client.pending) |pending| pending.deinit();
     client = .{};
+    reconnect_cooldown = 0;
 }
 
 fn initWithIdentity(api: *const abi.ShellApi, identity: ClientId) !void {
@@ -163,7 +204,7 @@ pub fn sync(ctx: *RuntimeContext) !void {
     mirrorReady(ctx, .document);
 }
 
-fn refreshMirrors(ctx: *RuntimeContext) !void {
+fn syncMirrors(ctx: *RuntimeContext) ?anyerror {
     var failure: ?anyerror = null;
     sync(ctx) catch |err| {
         failure = err;
@@ -177,7 +218,22 @@ fn refreshMirrors(ctx: *RuntimeContext) !void {
     syncAssets(ctx) catch |err| {
         if (failure == null) failure = err;
     };
-    if (failure) |err| return err;
+    return failure;
+}
+
+fn refreshMirrors(ctx: *RuntimeContext) !void {
+    if (syncMirrors(ctx)) |failure| return failure;
+}
+
+fn maybeReconnect(ctx: *RuntimeContext) void {
+    if (reconnect_cooldown > 0) {
+        reconnect_cooldown -= 1;
+        return;
+    }
+    reconnect(ctx) catch {
+        reconnect_cooldown = 30;
+        ctx.status.set("Host 不可用，等待重新连接");
+    };
 }
 
 fn allowedWhileStale(name: []const u8) bool {
@@ -287,7 +343,19 @@ fn forward(c: command.Command, opaque_ptr: *anyopaque) command.Result {
     // The authority's result is final for this invocation. A later read failure
     // marks the projection stale; it never retroactively fails/retries a command.
     refreshMirrors(ctx) catch {};
+    if (status == abi.Status.not_ready) ctx.status.set("Host 连接中断，命令结果无法确认；请核对文档后重试");
     return .{ .code = resultCode(status), .task_id = if (task_id == 0) null else task_id };
+}
+
+pub fn reconnect(ctx: *RuntimeContext) !void {
+    try @import("shell").client.reconnect();
+    if (client.pending == null) {
+        client.identity = null;
+        client.stamp = null;
+    }
+    try refreshMirrors(ctx);
+    reconnect_cooldown = 0;
+    ctx.status.set("Host 已重新连接，投影已刷新");
 }
 
 pub fn syncPlayback(ctx: *RuntimeContext) !void {
@@ -366,11 +434,38 @@ pub fn syncLibrary(ctx: *RuntimeContext) !void {
     mirrorReady(ctx, .library);
 }
 
+pub fn previewFrame(ctx: *RuntimeContext, expected: u64, allocator: std.mem.Allocator) !@import("vne").frame.Frame {
+    _ = ctx;
+    var info: @import("vne").abi.PreviewInfo = undefined;
+    if (client.api.preview_info(client.api.context, expected, &info) != abi.Status.ok) return error.PreviewUnavailable;
+    @import("vne").preview.validateInfo(info) catch return error.InvalidPreviewInfo;
+    if (info.bytes_len > 64 * 1024 * 1024) return error.PreviewTooLarge;
+    const frame = @import("vne").frame.Frame{
+        .width = info.width,
+        .height = info.height,
+        .generation = info.generation,
+        .pixels = try allocator.alloc(u8, info.bytes_len),
+        .epoch_hi = info.epoch_hi,
+        .epoch_lo = info.epoch_lo,
+    };
+    errdefer allocator.free(frame.pixels);
+    var written: usize = 0;
+    if (client.api.preview_read(client.api.context, expected, frame.pixels.ptr, frame.pixels.len, &written) != abi.Status.ok) return error.PreviewUnavailable;
+    if (written != info.bytes_len) return error.PreviewLengthMismatch;
+    return frame;
+}
+
+pub fn imageDimensions(allocator: std.mem.Allocator, bytes: []const u8) !struct { width: u32, height: u32 } {
+    var decoded = try @import("imaging").decode(allocator, bytes);
+    defer decoded.deinit(allocator);
+    return .{ .width = decoded.width, .height = decoded.height };
+}
+
 pub fn previewAsset(ctx: *RuntimeContext, handle: u64, expected_hash: ?[32]u8) !@import("vne").frame.Frame {
     if (!mirrorsFresh()) return error.StaleMirror;
     var preview = try @import("shell").mirror.previewPng(ctx.allocator, &client.api, handle, expected_hash);
     defer preview.deinit(ctx.allocator);
-    const decoded = try @import("runtime").image.decode(ctx.allocator, preview.bytes);
+    const decoded = try @import("imaging").decode(ctx.allocator, preview.bytes);
     if (decoded.width != preview.info.width or decoded.height != preview.info.height) {
         var owned = decoded;
         owned.deinit(ctx.allocator);
@@ -379,7 +474,18 @@ pub fn previewAsset(ctx: *RuntimeContext, handle: u64, expected_hash: ?[32]u8) !
     return .{ .width = decoded.width, .height = decoded.height, .generation = 1, .pixels = decoded.pixels };
 }
 
-fn loadSource(ptr: *anyopaque, node: @import("runtime").documents.Node) !@import("runtime").render.Source {
+pub const Source = struct {
+    image: @import("imaging").Image,
+    lease: u64 = 0,
+};
+
+pub const SourceProvider = struct {
+    context: *anyopaque,
+    load: *const fn (*anyopaque, documents.Node) anyerror!Source,
+    release: *const fn (*anyopaque, u64) void,
+};
+
+fn loadSource(ptr: *anyopaque, node: documents.Node) !Source {
     if (!mirrorsFresh()) return error.StaleMirror;
     const ctx: *RuntimeContext = @ptrCast(@alignCast(ptr));
     var expected_hex: [64]u8 = undefined;
@@ -406,12 +512,12 @@ fn loadSource(ptr: *anyopaque, node: @import("runtime").documents.Node) !@import
     }
     // Encoded bytes and decoded pixels are caller owned. No remote Station
     // lease can be orphaned if a reply is lost or this rendering attempt fails.
-    return .{ .image = try @import("runtime").image.decode(ctx.allocator, bytes[0..actual]), .lease = 0 };
+    return .{ .image = try @import("imaging").decode(ctx.allocator, bytes[0..actual]), .lease = 0 };
 }
 
 fn releaseSource(_: *anyopaque, _: u64) void {}
 
-pub fn sourceProvider(ctx: *RuntimeContext) @import("runtime").render.SourceProvider {
+pub fn sourceProvider(ctx: *RuntimeContext) SourceProvider {
     return .{ .context = ctx, .load = loadSource, .release = releaseSource };
 }
 
@@ -425,6 +531,11 @@ pub fn openExternal(ctx: *RuntimeContext, path: []const u8) !u64 {
     // handle even if reading the resulting projection fails.
     refreshMirrors(ctx) catch {};
     return handle;
+}
+
+pub fn registerExternal(ctx: *RuntimeContext, path: []const u8) !u64 {
+    const io = ctx.io orelse return error.IoNotReady;
+    return @import("shell").mirror.registerExternal(ctx.allocator, &client.api, &io, path);
 }
 
 pub fn register(ctx: *RuntimeContext) !void {
@@ -482,7 +593,9 @@ pub fn pump(ctx: *RuntimeContext) !void {
     const status = client.api.pump(client.api.context);
     // Always retry reads, including after an execution error. Projection health
     // is reported separately and must not be mistaken for a failed task.
-    refreshMirrors(ctx) catch {};
+    refreshMirrors(ctx) catch {
+        maybeReconnect(ctx);
+    };
     if (status != abi.Status.ok) return error.TaskPumpFailed;
 }
 
@@ -729,6 +842,8 @@ const MockShell = struct {
             .asset_source = assetSource,
             .asset_preview = undefined,
             .asset_read = undefined,
+            .preview_info = undefined,
+            .preview_read = undefined,
         };
     }
 };
@@ -885,6 +1000,19 @@ test "successful command remains successful when the document mirror fails and r
     try std.testing.expect(mirrorsFresh());
     try std.testing.expectEqual(remote.document.fingerprint(), ctx.document.fingerprint());
     try std.testing.expectEqual(@as(usize, 1), remote.command_calls);
+}
+
+test "transport-unknown command is not retried and reports an unknown outcome" {
+    const ctx = try testContext();
+    defer freeTestContext(ctx);
+    var remote: MockShell = .{ .command_status = abi.Status.not_ready };
+    const api = remote.api();
+    try init(&api);
+    try refreshMirrors(ctx);
+    const result = forward(.{ .name = "doc.read" }, ctx);
+    try std.testing.expectEqual(command.Code.not_ready, result.code);
+    try std.testing.expectEqual(@as(usize, 1), remote.command_calls);
+    try std.testing.expect(std.mem.indexOf(u8, ctx.status.get(), "无法确认") != null);
 }
 
 test "accepted task identity and authoritative refusal survive projection failure" {

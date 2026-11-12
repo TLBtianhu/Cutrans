@@ -1,7 +1,7 @@
 const std = @import("std");
 const vne = @import("vne");
 const RuntimeContext = @import("context.zig").Context;
-const command = @import("command.zig");
+const command = @import("vne").command;
 const input_actions = @import("input_actions.zig");
 
 pub const ExpectedAction = struct {
@@ -223,7 +223,7 @@ test "replay rejects a changed allocator baseline before consuming input" {
 pub fn run(ctx: *RuntimeContext, log: *const Log) !vne.abi.ReplayReport {
     if (ctx.devices.input.last_serial != 0 or ctx.history.count != 0 or ctx.tasks.count != 0) return error.ReplayRequiresFreshSession;
     if (log.version == 3 and ctx.document.fingerprint() != log.baseline_fingerprint.?) return error.InputBaselineMismatch;
-    if (log.version == 3 and ctx.document.nodeIdHighWater() != @import("documents.zig").Document.initDefault().nodeIdHighWater()) return error.InputBaselineMismatch;
+    if (log.version == 3 and ctx.document.nodeIdHighWater() != @import("vne").documents.Document.initDefault().nodeIdHighWater()) return error.InputBaselineMismatch;
     ctx.clock = .{ .manual = .{} };
     var action_index: usize = 0;
     for (log.events) |*event| {
@@ -318,7 +318,7 @@ test "semantic input replay advances clock and yields ordered device events" {
 }
 
 test "input replay v3 preserves context and arbitrary UTF-8 beyond the queue bound" {
-    const initial = @import("documents.zig").Document.initDefault().fingerprint();
+    const initial = @import("vne").documents.Document.initDefault().fingerprint();
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(std.testing.allocator);
     try appendFmt(&text, std.testing.allocator, "cutrans_input_replay=3\nclock=logical\nbaseline={d}\n", .{initial});

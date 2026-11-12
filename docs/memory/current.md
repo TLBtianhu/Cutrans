@@ -1,12 +1,12 @@
-# 现役状态（2026-11-08）
+# 现役状态（2026-11-09）
 
-这是当前实现的摘要。业务最近完成到C2c2；2026-11-08仅归档进度和问题，没有新增业务或重做旧验收。集中问题清单和接续顺序见[当前进度与待办](2026-11-08-progress.md)。各次历史测试只证明当次代码及产物。
+这是当前实现的摘要。业务最近完成到C2c2；后续已完成工作正文、本机文件、环境启动屏障、同 EXE 进程角色、静态 Runtime、PayloadSource 与环境内安全退出切片，各次实际验收以对应记录为准。当前进度、剩余问题与接续顺序见[当前检查点](2026-11-09-checkpoint.md)；[旧进度台账](2026-11-08-progress.md)保留为历史记录。各次历史测试只证明当次代码及产物。
 
 ## 产品与边界
 
 - Cutrans 是声明式 VM 与多域创作工作台的早期原型；当前实现最小单文档静态图像闭环。
 - `.cut v3` 支持 testsrc/gain/invert/over/image/resize，规范化文本、稳定引用与内容指纹。
-- A1已加入节点发号持久高水位及文档／History候选提交；失败不发布半编辑，撤销／恢复／新分支不复用节点ID。A2的文档API v1提供Runtime epoch＋revision、文档操作前置版本、请求去重与一致文档快照；当前Host／Shell为ABI10，独立资源API已在C2c2显式升v2，并在工作正文切片升v3，保留旧定位／采用／登记语义并新增工作快照与提交。Shell分账已知Outcome和投影失败，结果未知时仅重试原请求。工作成功回执已可跨恢复，旧文档／普通资源回执仍不跨Runtime重启保存；save／旧资源命令／原始语义输入尚未全部转为受管理请求。
+- A1已加入节点发号持久高水位及文档／History候选提交；失败不发布半编辑，撤销／恢复／新分支不复用节点ID。A2的文档API v1提供Runtime epoch＋revision、文档操作前置版本、请求去重与一致文档快照；当前Host／Shell为ABI10，独立资源API已在C2c2显式升v2，并在工作正文切片升v3，在本机文件切片升v4；保留旧定位／采用／登记语义，新增工作快照／提交与一层只读浏览。Shell分账已知Outcome和投影失败，结果未知时仅重试原请求。工作成功回执已可跨恢复，旧文档／普通资源回执仍不跨Runtime重启保存；save／旧资源命令／原始语义输入尚未全部转为受管理请求。
 - PNG 导入、预览、合成与导出可经同一命令入口完成；History、Task、Catalog 和授权有恢复记录。
 - 默认公开入口启动或复用独立 Host，再附着 desktop；关闭 Shell 与停止 VM 分开。
 - B1已接通持久导出声明、有界FIFO和Host无Shell自主推进；输出先prepare／sync／记录再原子提交，终态落盘失败只补日志。可分页查询归档与错误；重启保留声明并标interrupted，不自动重做可能已经写出的输出。
@@ -16,21 +16,25 @@
 - C2b实现资源独立stamp／一致快照、无副作用候选proof、relocate／adopt和当前Runtime回执；Runtime、Host与共享Shell客户端使用同一契约。相同内容才能重新定位，明确采用只更新库head；同路径新对象使用新授权绑定。create／detach统一不可变版本，失败不覆盖／删除旧内容；恢复保持发号高水位并使Station归属投影失效。完整GUI入口尚未接入，[契约与边界](../resource-operations.md)，实际本轮验收另记。
 - C2c1新增已登记资源的`asset.ensure id sha256`：VM按当前head核对后复用完整Station字节，命中不回源／不增lease。`asset.check handle`只记录指定已加载对象的来源观察，绑定变化后旧观察失效，来源失联仍保留内存。detach优先从匹配当前head的完整RAM独立保存，保持ID／显示名／父级。两UI精确选择版本，候选失败留旧预览，桌面必经动作区分同步结果与投影失败；严格open／fixed版本读取保持原校验。仍是PNG、同步核对、lease归零释放；没有LRU、全局F5或新代际自动采用。
 - C2c2新增Resource API v2普通只读文件登记与`resource.acquire id sha256`，TXT／PNG／未知／空及16MiB文件不依赖解码；默认reference，登记与消费支持分账，公共Shell交付验证精确Ref及bytes哈希。新来源口岸在同handle读正文前排除真实托管根／junction别名并拒多硬链；旧URI／mount仍兼容，非全局IO中介或强沙箱。旧换源仍限PNG，通用目录／完整App入口未实现。
-- 工作正文切片将Resource API升v3：owned资源具有独立工作revision和草稿token，自动保存草稿不推进工作头，显式提交才发布新正文。正文与草稿按revision完整发布，Catalog v3同次提交资源头、草稿元数据与成功回执；跨恢复重放不重复创建或提交。NanoUI支持创建、编辑和关闭保护，Document／History／排队Job继续固定原hash。失败回执、未决Shell队列、目录和共享异步求值仍按既有边界处理。
+- 工作正文切片将Resource API升v3：owned资源具有独立工作revision和草稿token，自动保存草稿不推进工作头，显式提交才发布新正文。正文与草稿按revision完整发布，Catalog v4同次提交资源头、草稿元数据、成功回执与客户端高水位；最近64条回执为环形覆盖，不再有终身64次上限，跨恢复重放不重复创建或提交。自动保存按空闲400ms防抖，Ctrl+S／关闭强制落盘。NanoUI支持创建、编辑和关闭保护，Document／History／排队Job继续固定原hash。失败回执、未决Shell队列、目录和共享异步求值仍按既有边界处理。
+- 本机文件切片将Resource API升v4：新增RPC31一层只读浏览与RPC32临时成员读取。浏览只保留路径／游标／条目投影，不隐式创建ResourceId、授权、留存或Station；目录最多4096项、每页128项。NanoUI本机文件页支持导航、刷新、文本／PNG预览和显式收录，登记与预览／消费分账，插入文档仍走既有资源库动作。
 - Task活跃队列8项（含执行中）、近期缓存40项、分页32项，终态逐Job归档且默认保留，已移除终身32项上限；文档8节点、库32资源仍是原型限额。B2已将导出decode／求值／编码移至会话锁外的单worker，支持持久协作取消与新ID／attempt重试；原输入版本不随当前编辑变化。
 - 真实视频音频、通用不可信插件、强制抢占式取消、Runtime 下载/自动更新、多版本安装和跨 OS 实机仍未完成。
 
 ## 安装与 UI
 
-- Windows 当前用户安装，单根包含 app/runtime-envs/shells/data；只有一个公开 Cutrans 快捷方式。
+- Windows 当前用户安装，单根包含 app/runtime-envs/shells/payload/data；只有一个公开 Cutrans 快捷方式。
 - 当前只允许同程序资产幂等重装；变更资产升级在复制前拒绝，完整回滚事务待实现。默认卸载保留用户数据。已有真实体验安装未被本轮更新或清理。
-- desktop 已统一为 NanoUI，包含首页、编辑器、资源库、CLI 与任务视图；独立 NanoUI 资源库诊断 Shell 保留。资源库可新建和编辑工作正文，自动保存草稿、显式提交并阻止关闭丢失未确认输入；图片仍走原预览。zgui/zglfw/wgpu 与旧 CUI 已移除，完整构建和源码包审计通过，实际 Host/Shell 场景回归另行记录。
+- desktop 已统一为 NanoUI，包含首页、编辑器、资源库、本机文件、CLI 与任务视图；独立 NanoUI 资源库诊断 Shell 保留。窗口使用原生 frame + 自绘标题栏（`decorations=true`、`title_bar=.hidden`）：自绘最小化/最大化/还原/安全退出，Alt+F4/任务栏关闭也先进入安全退出；默认以 Windows 最大化启动，F11 最大化/还原，原生 resize/Snap/系统菜单/DWM 阴影由 NanoUI `chrome.zig` 保留。资源库仍可新建和编辑工作正文、自动保存草稿、显式提交并阻止关闭丢失未确认输入。外部文件可拖入窗口或经系统对话框走 `register_file` 登记，资源库显示引用/拥有和来源状态，VM 私有目录拒绝。本机文件页只读浏览并在显式收录时登记，文本和 PNG 可临时预览。图片仍走原预览。zgui/zglfw/wgpu 与旧 CUI 已移除，完整构建和源码包审计通过，实际 Host/Shell 场景回归另行记录。
+- `EnvironmentSession` 以既有 Host 附着、Shell 校验和一致 Runtime 快照建立无物理路径的 epoch 环境身份。桌面、资源库和本机文件在启动屏障后共享该先验，主 ABI 不变；它不是授权凭证或实时状态机。详见[环境先验记录](2026-11-09-environment-session.md)。
+- `cutrans.exe` 已承担控制器、Host、桌面与资源库角色；这些角色仍是独立进程，经过同一 Pack 校验和 Session 启动屏障。统一 Host 默认使用静态 Runtime，不需要 Runtime DLL；显式目录仍选择动态 Pack，锁身份切换需显式 `--runtime=builtin`。默认 NanoUI 载荷位于 `payload/`，不再要求旧 Shell EXE；缺失外部 payload 时会从 exe 内嵌 blob 物化到临时缓存并重新校验，显式 `--shell-dir` 与损坏 manifest 仍失败、不回退内嵌。旧 Pack 仅在显式 `--shell-dir` 时回退。默认桌面启动不再把解析后的默认载荷路径当作显式 `--shell-dir`：同 id 但 manifest 哈希变化默认拒绝 `ShellLockMismatch`，内置桌面／资源库兄弟 id 之间切换仍允许。portable 与 installed context 都已内嵌；外部 `app/cutrans-context.json` 仍优先，安装器已不再复制该文件或 `vm-pack.json`，只装 exe/licenses/README；安装器已切到 `cutrans.exe`、瘦身并通过 preflight-only，真实安装/更新/卸载/发布仍未完成；[角色实施](2026-11-09-same-exe-roles.md)、[静态 Runtime](2026-11-09-static-runtime.md)、[PayloadSource](2026-11-09-payload-source.md)、[内嵌 payload](2026-11-10-embedded-payload.md)、[安装器入口](2026-11-10-installer-entry.md)。
+- NanoUI 已有独立“退出虚拟环境…”入口：停止新业务、等待或协作取消任务、提交 Shell 身份、保存并停止 Host；失败可重试，草稿不自动提交。普通窗口关闭（原生 X/Alt+F4/任务栏/自绘 X）现在也先进入同一安全退出，退出进行中拒绝关闭，失败后才允许“仅关闭窗口”，下次启动会收尾 Host。[安全退出实施与验证](2026-11-09-safe-exit.md)。portable payload/context 已内嵌进 `cutrans.exe`，只有 exe 的 headless 场景通过；安装版也内嵌 installed context，但外部 context 仍优先，安装器只通过 preflight/artifact，真实安装未做；[目标与状态机](2026-11-08-single-exe-safe-exit.md)。
 - 用户于本轮指定深靛蓝底、冰蓝到淡紫强调、少量暖金、细高光与轻微金属渐变。颜色纯数据由 `uikit/palette.zig` 共享，具体规则见 [UI规范](../ui-style.md)。
 - 无头功能与 D3D 离屏 readback 不代替真实窗口视觉、IME、焦点与操作手感，后者仍需用户主动体验。
 
 ## 本轮工程重构
 
-- NanoUI 对齐固定 fork `00e5813` / 0.12.0，官方→fork→Cutrans 两层差异与归档哈希在 `third_party/nanoui/VENDOR.json`。
+- NanoUI 对齐官方 `7b32272` / v0.14.0，官方基线 + 六个 Cutrans 本地补丁（`ui.d3d11`、`window_maximize`、`on_present`、`kv`），归档哈希和补丁清单在 `third_party/nanoui/VENDOR.json`。
 - Zig 保持 0.17.0，编译器和标准库由同一固定归档恢复；源码不再携带整套工具链。
 - Pack 使用缓存生成路径声明输入输出；安装前缀仅承接最终投影。测试模板、验证输出根与安装验收互斥统一管理。
 - 自动化Python子进程统一无控制台启动；Zig构建树使用预先隐藏的共享控制台，日志和退出码保留。Agent／无人值守构建须经统一隐藏入口，真实GUI窗口另行验证；[实施与证据](2026-11-07-quiet-automation.md)。
@@ -42,9 +46,11 @@
 
 用户于2026-11-07授权连续创作会话优化计划：身份与提交一致性→Host自主作业与恢复→资源版本与求值服务→声明注册与检查器→完整场景迁移NanoUI并清退旧栈，之后引入真实时变媒体。以PNG创作、双导出、关闭Shell后继续及重连恢复场景牵引；[计划与本轮A1范围](2026-11-07-architecture-plan.md)区分未完成项和实际验证，不把计划提前算作现役能力。
 
-A1／A2、B1／B2完成各自已记录的切片；C已推进到C2c2通用只读单文件登记与统一Ref交付，重新定位／明确采用核心已在C2b实现，工作正文与固定版本分离已在本轮落地，但完整恢复UI、通用换源与共享求值尚未完成。D声明schema／检查器仍待办。E的主场景NanoUI迁移与旧栈清退已完成，真实视觉／IME／焦点和操作手感仍未验收，不把主场景完成等同于完整体验验收。
+A1／A2、B1／B2完成各自已记录的切片；C已推进到C2c2通用只读单文件登记与统一Ref交付，重新定位／明确采用核心已在C2b实现，工作正文与固定版本分离及本机文件薄App入口已落地，但完整恢复UI、通用换源与共享求值尚未完成。D声明schema／检查器仍待办。E的主场景NanoUI迁移与旧栈清退已完成，真实视觉／IME／焦点和操作手感仍未验收，不把主场景完成等同于完整体验验收。
 
-下一业务切片接本机文件与资源库薄App入口，复用统一登记／交付／失败重试；目录、云来源、通用换源分片推进。继续C的完整FrameLease、共享异步求值及会话恢复，随后接D和真实时变媒体。工作正文实施与验收见[2026-11-08工作正文记录](2026-11-08-work-documents.md)。
+下一片可补目录成员显式收纳关系，再继续完整FrameLease、共享异步求值及会话恢复；目录整体收纳、工程目录独立化、流式超大目录、云来源和通用换源分片推进，随后接D和真实时变媒体。工作正文与本机文件实施验收分别见[工作正文记录](2026-11-08-work-documents.md)和[本机文件记录](2026-11-08-local-file-sources.md)。
+
+发行推进已建立 `EnvironmentSession` 启动屏障、同 EXE 多角色入口、默认静态 RuntimeProvider、外置 PayloadSource、payload/portable context 内嵌回退与环境内安全退出；动态 Runtime Pack 和显式旧 Shell Pack 保留回退。portable-single 已产出单 exe；安装器入口已切到统一 `cutrans.exe` 并瘦身，但真实安装、安装版 context 迁移、旧布局升级和受管发布仍未完成；物理 ShellConfig 路径、真实 GUI／IME 和安装验收仍待后续。
 
 save／旧命令受管理收口、跨文件通用事务、完整失败回执、未决Shell请求恢复、自动重连、完整任务／恢复工作流及其它ABI栈边界仍未齐；单worker／协作取消和单次I/O期限不是强制抢占或整体停机保证。原型容量、来源慢IO、旧URI／mount兼容、symlink未覆盖、上游新提交未适配、Zig间歇异常未定位、缓存／证据无自动预算及安装升级卸载未验收均继续保留为问题。下一轮大量构建前需治理缓存增长，后续上游更新前需审官方／fork／Cutrans差异；旧数据、证据和体验安装不据此自动清理或更新。
 
@@ -83,3 +89,43 @@ C2c2最终179/179构建步骤、新实际DLL／Host14组及同产物18项headles
 2026-11-08统一 NanoUI 前端完成：主桌面包含首页、编辑器、资源库、CLI与任务视图，旧zgui/zglfw/wgpu与CUI已移除。最终完整构建166/166步骤、`test-nanoui-desktop` 6/6、Shell 31/31、独立库53/53、附着31/31、便携31/31、Runtime与隔离61/61、作业与通用资源32/32步骤通过，仓库审计selected=1050/required=1054通过。没有真实GUI／IME、完整安装升级卸载或发布验收，详见[统一 NanoUI 实施记录](2026-11-08-nanoui-unification.md)。
 
 随后完成工作正文切片：Resource API v3、Catalog v3、草稿与工作revision、成功回执跨恢复及NanoUI正文编辑已落地。`test-core test install portable`、桌面测试、正文DLL／Host、通用登记、Shell、独立资源库、附着、便携、Runtime／隔离、异步作业和仓库审计均退出0；正文专项证明旧导出固定输入、丢回复及重启不重复提交，原生无头场景覆盖多行输入、草稿、提交和关闭保护。真实GUI／IME、完整安装升级卸载与发布仍未验收，详见[工作正文实施记录](2026-11-08-work-documents.md)。
+
+本机文件切片随后完成：Resource API v4、RPC31／32、一层只读浏览、临时文本／PNG预览、显式登记与插入文档已落地。真实DLL／Host／NanoUI验证通过，浏览不隐式创建资源、授权、留存或Station；完整目录收纳、工程目录独立化和流式超大目录未完成。详见[本机文件实施记录](2026-11-08-local-file-sources.md)。
+
+2026-11-09新增 `EnvironmentSession` 启动屏障：桌面、资源库和本机文件以既有 Host 附着、Shell 校验和 Runtime epoch 建立无物理路径的环境身份。完整构建、桌面、正文、登记、主 Shell、资源库、本机文件、附着、便携、Runtime／隔离和异步作业回归均退出0；单 EXE 多角色、静态 Runtime、内嵌载荷和完整安全退出仍未实现。详见[环境先验实施记录](2026-11-09-environment-session.md)。
+
+随后 `cutrans.exe` 同 EXE 多角色已落地：控制器、Host、桌面和资源库共享同一可执行文件，进程边界、Pack 校验与 Shell 提交不变。全隐藏专项真实进程与生命周期验证通过，最终完整构建及 Host、桌面模型、正文、登记、本机文件、资源库、便携、Runtime／隔离和异步作业回归退出0；旧 EXE 与 Pack 仍为回退。未切换安装器入口，未完成静态 Runtime、内嵌载荷、最终单文件发行或完整安全退出；可见播放、真实视觉／IME 和安装验收不在本轮通过范围。详见[同 EXE 角色实施记录](2026-11-09-same-exe-roles.md)。
+
+其后统一 Host 默认静态 Runtime 已完成：无 Runtime 目录的真实 Host／NanoUI／保存恢复通过，显式动态 Pack 与锁迁移也通过；完整构建、同 EXE 与旧动态 Host、资源、正文、本机文件、资源库、便携、Runtime 隔离和异步作业回归退出0。当前仍需 Shell 资源 Pack，最终载荷收口、安装器切换与完整安全退出未完成。详见[静态 Runtime 实施记录](2026-11-09-static-runtime.md)。
+
+随后 PayloadSource 已建立：桌面与资源库使用 `payload/` 中的 `cutrans-payload/1` 清单和只读资源，`entry=builtin` 不再要求旧 Shell EXE。无旧 EXE／Runtime／旧 Pack 的真实场景通过；显式旧 Pack 回退成功，缺失或损坏 Payload 当时拒绝且没有隐式回退。2026-11-10 已增加 exe 内嵌 payload 回退（见[内嵌 payload](2026-11-10-embedded-payload.md)）；受管发布、安装器切换与完整单文件发行仍未完成。详见[PayloadSource 实施记录](2026-11-09-payload-source.md)。
+
+环境内安全退出已接通：Host 停止新业务、等待／协作取消、撤销退出、保存并正常停止，NanoUI 在成功前不关闭并支持失败重试。实际任务、草稿保护、Shell 身份提交、冷恢复和重启均通过；没有自动提交工作 revision。协作取消不是强制抢占，真实 GUI／IME 与安装验收未覆盖；完整单文件发行（外部 context/安装器）仍未完成，payload 内嵌已原型。详见[安全退出实施记录](2026-11-09-safe-exit.md)。
+
+2026-11-09 工作回执与恢复修复：自动保存改为空闲防抖，Catalog v4 以环形64条回执＋128个持久客户端高水位取代终身64次上限；Host 的 stopping／degraded 可由普通启动收尾并重启，控制转换失败不再终止 Host，退出进行中拒绝关窗。默认桌面不再以默认载荷路径伪装显式选择，同 id 哈希变化拒绝，内置桌面／资源库兄弟切换保留。`build test`、工作正文专项（70次连续草稿＋旧序号拒绝）、安全退出专项（stranded／control）与 Payload 专项均退出0；未做真实 GUI／IME、安装升级卸载与强制抢占验收，回执表满后的极端伪造边界仍按记录保留。详见[本轮修复记录](2026-11-09-work-recovery.md)。
+
+2026-11-10 宿主边界切片：桌面默认原生边框最大化、F11 最大化/还原；外部文件统一经 Resource API `register_file` 登记，支持 OS 拖入和系统文件对话框，资源库保留引用/拥有与来源状态，VM 私有目录拒绝。本机文件页测试覆盖显式登记、拖入登记和 managed 目录拒绝；Payload 与安全退出回归通过。真实 Explorer 拖放、系统文件对话框、无边框全屏、真实 F11/最小化手感与安装仍未验收。详见[宿主边界记录](2026-11-10-host-boundary.md)。
+
+2026-11-10 NanoUI 同步：vendor 从 fork 0.12 切到官方 v0.14.0（`7b32272`），采用官方 `chrome.zig` 的原生 frame + 自绘标题栏，退休 borderless、D3D11 纹理、CPU stride 等已上游补丁；保留 `ui.d3d11`、`window_maximize`、`on_present`、`kv` 六文件本地补丁。`build test`、payload、local-sources、safe-exit、test-nanoui-library 通过；`test-nanoui` 连续四次 585 pass / 21 skip / 0 fail（此前一次 `WS_EX_TOPMOST` 失败未复现），新增 `verify-nanoui-chrome` 跑隐藏窗口的顶边/hit-test/caption/maximize 回归。真实拖拽/缩放、Snap、视觉与安装未验收。详见 [NanoUI v0.14 同步记录](2026-11-10-nanoui-v014-sync.md)。
+
+2026-11-10 内嵌 payload/context：portable `payload/` 与 `cutrans-context.json` 已编入 `cutrans.exe`；缓存逐文件校验、损坏重建，并用 staging+rename 让并发启动只产生一个完整缓存，旧于30天的目录尽力清理。外部缺失时内嵌副本物化到 `%TEMP%` 并重新校验，只有 exe 的 portable headless 场景通过。ABI 11 后 `zig-out/single/cutrans.exe` 为 12,708,352 字节（目录内仅此文件），`verify-single-exe` 通过 start/shell/stop 且不生成外部 payload/context。安装器入口已改指统一 `cutrans.exe` 并瘦身到 exe/licenses/README（4,840,425 字节），不再复制 context 或 vm-pack；旧多目录布局明确拒绝自动升级；ABI 11 后 `build installer` 与 preflight-only `verify-installer-artifact` 通过（未写系统登记）；真实安装/更新/卸载/发布未做。详见[内嵌 payload](2026-11-10-embedded-payload.md)和[安装器入口与瘦身](2026-11-10-installer-entry.md)。
+
+2026-11-10 Shell 命令边界：命令队列从 Runtime 私有模块提升为 `vne.command`，Runtime 与 Shell 共用；desktop view 不再直接导入 runtime，PNG 尺寸检查经 `vm_client`。命令语义、ABI 和协议字节未变；Shell 仍持有 `RuntimeContext` 与 runtime documents/render/image，后续继续拆投影边界。详见 [Shell 命令边界](2026-11-10-shell-command-boundary.md)。
+
+2026-11-10 Shell 投影边界：`apps/desktop` 与 `apps/editor` 不再直接导入 `runtime`，改用 `vm_client` 暴露的 Context/Preview/Frame/Paths；build 依赖同步移除。`runtime/status.zig` 移到 `vne.status`，路径边界移到 `vne.paths`，文档模型移到 `vne.documents`，Runtime 继续 re-export。Shell 直接依赖 Runtime 的位置收口到 `vm_client` 一个适配层；本地预览求值已改走 VM preview ABI，但 RuntimeContext、image 解码仍未拆除。详见 [Shell 投影边界](2026-11-10-shell-projection-boundary.md)。
+
+2026-11-10 架构边界守卫：新增 `tools/verify_architecture.py` 和 `build verify-architecture`，拒绝 `apps`/`shell` 直接导入 runtime，以及各层跨层 UI/host 导入。当前六层通过；这是直接 `@import` 扫描，不是完整模块图证明。详见 [架构边界守卫](2026-11-10-architecture-guard.md)。
+
+2026-11-10 Preview ABI：ShellApi 升到 11，新增 preview info/read；Runtime 按 fingerprint 缓存并返回 BGRA8 帧，Host RPC 与 Shell client 接通，编辑器改用 `vm_client.previewFrame`，不再本地跑文档预览 DAG。源内负例、Host mock、payload/single-exe 通过；没有专门真窗口视觉验收。详见 [Preview ABI](2026-11-10-preview-abi-contract.md)。
+
+2026-11-10 Shell 自有投影上下文：桌面/编辑器/控制台改用 `vm_client.Context`，不再实例化 `RuntimeContext`；Shell 只持有命令、文档镜像、资源/库/播放/设备视图与路径。`build test`、payload 通过。详见 [Shell 自有投影上下文](2026-11-10-shell-owned-context.md)。
+
+2026-11-10 Shell 与 imaging 解耦：PNG 编解码移到共享 `imaging` 模块，`vm_client` 不再导入 runtime；sourceProvider 改为 Shell 本地类型，架构守卫增加 `vm_client` 文件级 runtime 禁入。详见 [Shell 与 imaging 解耦](2026-11-10-shell-imaging-decoupling.md)。
+
+2026-11-11 Preview 验证与 RuntimeContext 修剪：真实 Host + 隐藏 Shell 的 desktop verify 请求两帧、校验 generation/像素、短 buffer 和 stale fingerprint；PreviewInfo 携带 Runtime epoch/revision，新 Runtime 实例 epoch 必变；新增独立 `verify-preview`；Shell client 携带已知 epoch，Host 重启后旧 epoch 请求被拒绝并重试。RuntimeContext 移除仅 Shell 使用的 asset_view/library_view/playback_view。status/devices 仍有真实 Runtime 消费者，保留。详见 [Preview 验证与 RuntimeContext 修剪](2026-11-11-preview-verification-context-trim.md)。
+
+2026-11-11 受管理 doc.save：`doc.save` 纳入 `vne.workspace.manages`，复用 client identity/sequence/expected 与 receipt；丢回复重试同一请求可回放，不重复保存。没有新增 ABI/协议；receipt 仍只在单 Runtime 生命周期内有效。详见 [受管理 doc.save](2026-11-11-managed-save.md)。
+
+2026-11-11 Host 重连 v1：Shell 增加 `reconnect()`，镜像读取失败后重新 verify Host 并重试一次；成功清空 preview epoch/identity/stamp，pending 请求保留不自动重放。普通命令仍不自动重试；`verify-reconnect` 已通过真实 Host 停止/重启 + 隐藏 Shell 自动检测、重连；pump 失败触发连接重建并有冷却窗口。详见 [Host 重连 v1](2026-11-11-host-reconnect-v1.md)。
+
+2026-11-11 事故恢复与快照：本机清理事件永久删除了 DSH 会话 `Cutrans-zig0.1` 的 75 轮正文（仓库源文件未受损）；核对发现 2026-11-09～11-11 的全部切片都还在工作区、未提交。修复 `tools/verify_reconnect.py` 的语法错误和停机窗口竞态，补齐重连 v2 的 `pump`/冷却/未受管命令语义，并把 uv CPython 3.12 加入用户 PATH 以恢复隐藏入口。`build test`、`verify-payload`、`verify-reconnect`（auto_detect=1）与 `verify-repository` 通过；工作区已作为 master 快照提交并推送 `origin/master`。未做真实 GUI/IME、安装更新或强制抢占验收；事故根因未查明，桌面索引备份与验证证据不得清理。详见 [事故恢复与快照](2026-11-11-incident-recovery.md)。

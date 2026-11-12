@@ -27,6 +27,7 @@ pub const RuntimeSuites = struct {
     optimize: std.lang.Optimize,
     vne: *std.Build.Module,
     runtime: *std.Build.Module,
+    imaging: *std.Build.Module,
     assets: *std.Build.Module,
     ports: *std.Build.Module,
     stb: *std.Build.Step.Compile,
@@ -39,7 +40,8 @@ pub const RuntimeSuites = struct {
             .link_libc = true,
             .imports = &.{
                 .{ .name = "vne", .module = self.vne },       .{ .name = "runtime", .module = self.runtime },
-                .{ .name = "assets", .module = self.assets }, .{ .name = "ports", .module = self.ports },
+                .{ .name = "imaging", .module = self.imaging }, .{ .name = "assets", .module = self.assets },
+                .{ .name = "ports", .module = self.ports },
             },
         });
         module.linkLibrary(self.stb);

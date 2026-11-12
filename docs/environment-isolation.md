@@ -40,6 +40,7 @@ Pack 的 `pack://` 是只读输入；Session、持久资源库、可重建缓存
 
 | 真实入口 | 上下文及行为 |
 | --- | --- |
+| `cutrans.exe` | 统一控制器与独立 Host／NanoUI 角色；默认静态 Runtime 与 `payload/`，旧 Shell Pack 仅显式回退，缺失或损坏 Payload 不隐式回退 |
 | `cutrans_vm.exe` | console `context/start/status/stop/restart/desktop/library/activate-runtime`；共享 bootstrap 解析 |
 | `cutrans_bootstrap.exe` | headless、诊断与回放；共享同一解析，写入必须显式独立数据 |
 | `cutrans_vm_host.exe` | 独立后台 Host；相同实例标记、规范路径、锁与 Runtime 校验 |

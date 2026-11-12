@@ -80,7 +80,7 @@ pub const Api = extern struct {
 /// Only document edits and snapshot-bound export admission are retry managed.
 /// Library, filesystem saving, and external grants keep their explicit legacy contracts.
 pub fn manages(name: []const u8) bool {
-    inline for (.{ "doc.open", "doc.write", "editor.gain.set", "editor.invert.add", "editor.over.add", "editor.over.opacity.set", "editor.resize.add", "editor.image.open", "editor.asset.insert", "editor.export.png", "task.retry", "history.undo", "history.redo" }) |candidate|
+    inline for (.{ "doc.open", "doc.save", "doc.write", "editor.gain.set", "editor.invert.add", "editor.over.add", "editor.over.opacity.set", "editor.resize.add", "editor.image.open", "editor.asset.insert", "editor.export.png", "task.retry", "history.undo", "history.redo" }) |candidate|
         if (std.mem.eql(u8, name, candidate)) return true;
     return false;
 }
@@ -96,6 +96,6 @@ test "document stamps include the Runtime incarnation and mutation sequence" {
     try std.testing.expect(stamp.eql(stamp));
     try std.testing.expect(!stamp.eql(.{ .epoch_hi = 1, .epoch_lo = 3, .revision = 1 }));
     try std.testing.expect(manages("editor.export.png"));
-    try std.testing.expect(!manages("doc.save"));
+    try std.testing.expect(manages("doc.save"));
     try std.testing.expect(!manages("library.rename"));
 }

@@ -11,6 +11,8 @@ pub const Insert = struct {
 pub const State = struct {
     allocator: std.mem.Allocator,
     api: abi.ShellApi,
+    io: ?std.Io = null,
+    session: @import("vne").environment_session.Session = undefined,
     catalog: @import("vne").library.View = .{},
     assets: @import("vne").assets.View = .{},
     selected_folder: u64 = 0,
@@ -27,12 +29,14 @@ pub const State = struct {
     on_insert: ?Insert = null,
     status_storage: [320]u8 = @splat(0),
     status_len: usize = 0,
+    work_frame_pending: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, api: *const abi.ShellApi, io: ?std.Io) !State {
         // Validate the readable ABI prefix before copying an enlarged table.
         if (!api.isCurrent()) return error.InvalidShellApi;
         if (api.context == null) return error.MissingRuntimeHandle;
-        var self: State = .{ .allocator = allocator, .api = api.* };
+        var self: State = .{ .allocator = allocator, .api = api.*, .io = io };
+        self.session = try @import("vne").environment_session.establish(api);
         self.work = @import("work_model.zig").Model.init(allocator, api, io);
         errdefer self.deinit();
         try self.sync();
@@ -83,7 +87,16 @@ pub const State = struct {
     pub fn sync(self: *State) !void {
         try mirror.syncLibrary(self.allocator, &self.api, &self.catalog);
         try mirror.syncAssets(self.allocator, &self.api, &self.assets);
-        if (self.work) |*work| try work.pump();
+        if (self.work) |*work| {
+            try work.pump(false);
+            self.work_frame_pending = work.needsFrame();
+        } else {
+            self.work_frame_pending = false;
+        }
+    }
+
+    pub fn needsFrame(self: *const State) bool {
+        return self.work_frame_pending;
     }
 
     fn command(self: *State, name: []const u8, arg: []const u8) !void {
@@ -155,19 +168,29 @@ pub const State = struct {
     }
 
     pub fn importExternal(self: *State, path: []const u8) !u64 {
-        const handle = try mirror.openExternal(&self.api, path);
+        const io = self.io orelse return error.IoNotReady;
+        const library_id = try mirror.registerExternal(self.allocator, &self.api, &io, path);
         try self.sync();
-        const asset = self.assets.find(handle) orelse return error.AssetMirrorMissing;
-        if (asset.library_id == 0) return error.LibraryMirrorMissing;
-        try self.selectLibrary(asset.library_id);
-        return handle;
+        self.selectLibrary(library_id) catch |err| switch (err) {
+            error.AssetPreviewFailed => {
+                if (self.work) |*work| if (work.editor != null) try work.close();
+                self.clearPreview();
+                self.selected_library = library_id;
+                const item = self.catalog.findResource(library_id) orelse return error.LibraryMirrorMissing;
+                self.selected_folder = item.parent_id;
+                self.setStatus("资源已登记；预览尚未建立，可稍后重试。登记结果不回滚", .{});
+            },
+            else => return err,
+        };
+        self.setStatus("已从本机登记；引用状态与来源核对在检查器", .{});
+        return library_id;
     }
 
     pub fn pickExternal(self: *State) !void {
         const selected = try nanoui.dialog.open(self.allocator, .{
-            .title = "导入 PNG 到 VM 资源库",
+            .title = "从本机导入到 VM 资源库",
             .button = "导入",
-            .extensions = &.{"png"},
+            .extensions = &.{},
         });
         if (selected) |paths| {
             defer nanoui.dialog.freePaths(self.allocator, paths);

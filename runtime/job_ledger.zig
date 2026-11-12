@@ -4,8 +4,8 @@
 const std = @import("std");
 const tasks = @import("tasks.zig");
 const job_mod = @import("export_job.zig");
-const documents = @import("documents.zig");
-const command = @import("command.zig");
+const documents = @import("vne").documents;
+const command = @import("vne").command;
 const storage = @import("storage.zig");
 const workspace = @import("vne").workspace;
 

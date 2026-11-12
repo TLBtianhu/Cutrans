@@ -116,14 +116,6 @@ fn replayed(ctx: *Context, epoch: [2]u64, sequence: u64, receipt: library.WorkRe
     };
 }
 
-fn persistentHigh(ctx: *const Context, client_hi: u64, client_lo: u64) u64 {
-    var high: u64 = 0;
-    for (ctx.library.work_receipts[0..ctx.library.work_receipt_count]) |receipt| {
-        if (receipt.client_hi == client_hi and receipt.client_lo == client_lo) high = @max(high, receipt.sequence);
-    }
-    return high;
-}
-
 const Book = receipts.Book(api.WorkOutcome, api.receipt_capacity);
 
 pub const Registry = struct {
@@ -148,11 +140,9 @@ pub const Registry = struct {
             return known;
         }
         const client = [2]u64{ request.client_hi, request.client_lo };
-        if (self.book.clients.get(client) == null) {
-            if (self.book.clients.count() >= self.book.client_limit) return rejected(ctx, epoch, request, api.Status.client_limit);
-            const entry = try self.book.clients.getOrPut(client);
-            if (!entry.found_existing) entry.value_ptr.* = persistentHigh(ctx, request.client_hi, request.client_lo);
-        }
+        // The receipt ring is bounded; the persistent per-client watermark is
+        // what prevents an evicted sequence from executing again after restart.
+        try self.book.seed(client, ctx.library.clientHigh(request.client_hi, request.client_lo) orelse 0);
         const high = switch (try self.book.prepare(client, request.sequence, digest)) {
             .replayed => |known| {
                 var result = known;
@@ -187,6 +177,7 @@ pub const Registry = struct {
         } catch |err| {
             const known = rejected(ctx, epoch, request, status(err));
             self.book.record(high, client, request.sequence, digest, known);
+            ctx.library.rememberClient(request.client_hi, request.client_lo, request.sequence);
             return known;
         };
         const known = api.WorkOutcome{
@@ -200,6 +191,7 @@ pub const Registry = struct {
             .content_hash = outcome.content_hash,
         };
         self.book.record(high, client, request.sequence, digest, known);
+        ctx.library.rememberClient(request.client_hi, request.client_lo, request.sequence);
         return known;
     }
 };
@@ -344,8 +336,15 @@ test "failed commit retains its draft and discard never reuses a token" {
     _ = try submit(&registry, &ctx, &workRequest(6, .discard, 1, 0, 2, "", ""));
     const next = try submit(&registry, &ctx, &workRequest(7, .save_draft, 1, 2, 0, "", "three"));
     try std.testing.expectEqual(@as(u64, 3), next.draft_revision);
+    // A full receipt ring must not stop new work. The oldest receipt is
+    // overwritten; the persistent client watermark still makes old sequences
+    // refusable instead of executable.
+    const template = ctx.library.work_receipts[ctx.library.work_receipt_count - 1];
+    for (&ctx.library.work_receipts) |*receipt| receipt.* = template;
     ctx.library.work_receipt_count = ctx.library.work_receipts.len;
+    ctx.library.work_receipt_next = 0;
     const full = try submit(&registry, &ctx, &workRequest(8, .discard, 1, 0, 3, "", ""));
-    try std.testing.expectEqual(api.Status.receipt_limit, full.status);
-    try std.testing.expectEqual(@as(u64, 3), ctx.library.get(1).?.draft_revision);
+    try std.testing.expectEqual(abi.Status.ok, full.status);
+    try std.testing.expectEqual(@as(u64, 0), ctx.library.get(1).?.draft_revision);
+    try std.testing.expectEqual(@as(?u64, 8), ctx.library.clientHigh(11, 22));
 }

@@ -177,6 +177,38 @@ fn workSubmit(allocator: std.mem.Allocator, api: *const resource.Api, payload: [
     return .{ .payload = bytes, .allocator = allocator };
 }
 
+fn localSourceReply(allocator: std.mem.Allocator, api: *const resource.Api, read_file: bool, payload: []const u8) !Reply {
+    var path: []const u8 = undefined;
+    var cursor: u64 = 0;
+    var limit: u32 = 0;
+    if (read_file) {
+        path = protocol.source_wire.parseRead(payload) catch return error.InvalidRpcPayload;
+    } else {
+        const browse = protocol.source_wire.parseBrowse(payload) catch return error.InvalidRpcPayload;
+        path = browse.path;
+        cursor = browse.cursor;
+        limit = browse.limit;
+    }
+    var required: usize = 0;
+    const query = if (read_file)
+        api.source_read(api.context, resource.Bytes{ .ptr = path.ptr, .len = path.len }, null, 0, &required)
+    else
+        api.source_browse(api.context, resource.Bytes{ .ptr = path.ptr, .len = path.len }, cursor, limit, null, 0, &required);
+    if (query != abi.Status.buffer_too_small) return .{ .status = query };
+    if (required > protocol.max_payload) return error.InvalidRpcPayload;
+    const bytes = try allocator.alloc(u8, required);
+    errdefer allocator.free(bytes);
+    const status = if (read_file)
+        api.source_read(api.context, resource.Bytes{ .ptr = path.ptr, .len = path.len }, bytes.ptr, bytes.len, &required)
+    else
+        api.source_browse(api.context, resource.Bytes{ .ptr = path.ptr, .len = path.len }, cursor, limit, bytes.ptr, bytes.len, &required);
+    if (status != abi.Status.ok) {
+        allocator.free(bytes);
+        return .{ .status = status };
+    }
+    return .{ .payload = bytes, .allocator = allocator };
+}
+
 fn readBuffer(allocator: std.mem.Allocator, function: anytype, context: ?*anyopaque, id: u64) !Reply {
     var required: usize = 0;
     const size_status = function(context, id, null, 0, &required);
@@ -295,6 +327,45 @@ pub fn call(allocator: std.mem.Allocator, api: *const abi.ShellApi, grant_extern
             }
             if (request.id != 0) return error.InvalidRpcPayload;
             return workSubmit(allocator, &authority, payload);
+        },
+        .source_browse, .local_read => {
+            if (request.id != 0) return error.InvalidRpcPayload;
+            var authority: resource.Api = undefined;
+            const status = resourceApi(api, &authority);
+            if (status != abi.Status.ok) return .{ .status = status };
+            return localSourceReply(allocator, &authority, request.kind == .local_read, payload);
+        },
+        .preview_info => {
+            if (request.id != 0 or (payload.len != 8 and payload.len != 24)) return error.InvalidRpcPayload;
+            const expected = std.mem.readInt(u64, payload[0..8], .little);
+            const expected_epoch: ?[2]u64 = if (payload.len == 24) .{ std.mem.readInt(u64, payload[8..16], .little), std.mem.readInt(u64, payload[16..24], .little) } else null;
+            var info: abi.PreviewInfo = undefined;
+            const status = api.preview_info(api.context, expected, &info);
+            if (status == abi.Status.ok) if (expected_epoch) |epoch| {
+                if (info.epoch_hi != epoch[0] or info.epoch_lo != epoch[1]) return .{ .status = abi.Status.invalid_state };
+            };
+            return .{ .status = status, .payload = if (status == abi.Status.ok) try fixed(allocator, info) else &.{}, .allocator = allocator };
+        },
+        .preview_read => {
+            if (request.id != 0 or (payload.len != 8 and payload.len != 24)) return error.InvalidRpcPayload;
+            const expected = std.mem.readInt(u64, payload[0..8], .little);
+            const expected_epoch: ?[2]u64 = if (payload.len == 24) .{ std.mem.readInt(u64, payload[8..16], .little), std.mem.readInt(u64, payload[16..24], .little) } else null;
+            var info: abi.PreviewInfo = undefined;
+            const info_status = api.preview_info(api.context, expected, &info);
+            if (info_status != abi.Status.ok) return .{ .status = info_status };
+            if (expected_epoch) |epoch| {
+                if (info.epoch_hi != epoch[0] or info.epoch_lo != epoch[1]) return .{ .status = abi.Status.invalid_state };
+            }
+            if (info.bytes_len > protocol.max_payload) return error.InvalidRpcPayload;
+            const bytes = try allocator.alloc(u8, info.bytes_len);
+            errdefer allocator.free(bytes);
+            var required: usize = 0;
+            const status = api.preview_read(api.context, expected, bytes.ptr, bytes.len, &required);
+            if (status != abi.Status.ok or required != info.bytes_len) {
+                allocator.free(bytes);
+                return .{ .status = status };
+            }
+            return .{ .payload = bytes, .allocator = allocator };
         },
         .command_result => {
             const strings = try commandPayload(payload);
@@ -532,6 +603,54 @@ test "resource Host snapshot is coherent at revision zero and rejects old ABI ta
     try std.testing.expectEqual(getters, mock.getters);
 }
 
+test "Host transports preview info and pixels without Shell struct coupling" {
+    const Mock = struct {
+        fn shellApi(self: *@This()) abi.ShellApi {
+            var value: abi.ShellApi = undefined;
+            value.context = self;
+            value.preview_info = info;
+            value.preview_read = read;
+            return value;
+        }
+        fn info(_: ?*anyopaque, expected: u64, out: ?*abi.PreviewInfo) callconv(.c) i32 {
+            if (expected != 41) return abi.Status.invalid_state;
+            out.?.* = .{ .struct_size = @sizeOf(abi.PreviewInfo), .abi_version = @import("vne").preview.version, .width = 2, .height = 1, .format = @intFromEnum(@import("vne").preview.Format.bgra8), .generation = 3, .fingerprint = 41, .epoch_hi = 1, .epoch_lo = 2, .revision = 1, .bytes_len = 8 };
+            return abi.Status.ok;
+        }
+        fn read(_: ?*anyopaque, expected: u64, buffer: ?[*]u8, capacity: usize, out_len: ?*usize) callconv(.c) i32 {
+            if (expected != 41) return abi.Status.invalid_state;
+            out_len.?.* = 8;
+            if (buffer == null or capacity < 8) return abi.Status.buffer_too_small;
+            @memcpy(buffer.?[0..8], "BGRA0000");
+            return abi.Status.ok;
+        }
+    };
+    var mock: Mock = .{};
+    var api = mock.shellApi();
+    var frame_payload: [8]u8 = undefined;
+    std.mem.writeInt(u64, &frame_payload, 41, .little);
+    var info_reply = try call(std.testing.allocator, &api, WorkspaceMock.noGrant, .{ .kind = .preview_info, .payload_len = 8 }, &frame_payload);
+    defer info_reply.deinit();
+    try std.testing.expectEqual(abi.Status.ok, info_reply.status);
+    try std.testing.expectEqual(@as(usize, @sizeOf(abi.PreviewInfo)), info_reply.payload.len);
+    var pixels_reply = try call(std.testing.allocator, &api, WorkspaceMock.noGrant, .{ .kind = .preview_read, .payload_len = 8 }, &frame_payload);
+    defer pixels_reply.deinit();
+    try std.testing.expectEqual(abi.Status.ok, pixels_reply.status);
+    try std.testing.expectEqualSlices(u8, "BGRA0000", pixels_reply.payload);
+    std.mem.writeInt(u64, &frame_payload, 42, .little);
+    var stale = try call(std.testing.allocator, &api, WorkspaceMock.noGrant, .{ .kind = .preview_info, .payload_len = 8 }, &frame_payload);
+    defer stale.deinit();
+    try std.testing.expectEqual(abi.Status.invalid_state, stale.status);
+    const scoped_old = [_]u8{ 41, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0 };
+    var old_epoch = try call(std.testing.allocator, &api, WorkspaceMock.noGrant, .{ .kind = .preview_info, .payload_len = 24 }, &scoped_old);
+    defer old_epoch.deinit();
+    try std.testing.expectEqual(abi.Status.invalid_state, old_epoch.status);
+    const scoped_current = [_]u8{ 41, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0 };
+    var current_epoch = try call(std.testing.allocator, &api, WorkspaceMock.noGrant, .{ .kind = .preview_info, .payload_len = 24 }, &scoped_current);
+    defer current_epoch.deinit();
+    try std.testing.expectEqual(abi.Status.ok, current_epoch.status);
+}
+
 test "resource Host transports fixed proofs and separates known refusal from unknown submit" {
     var mock: ResourceMock = .{};
     const api = mock.shellApi();
@@ -649,7 +768,7 @@ test "Host source reading enforces table tail framing and never publishes a fail
 }
 
 test "work Host accepts the Python request and returns its fixed outcome" {
-    const hex = "600000000300000001d300000000000002d3000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000d000000000000000800000000000000686f73742d6e6f74652e747874686f7374206f6c64";
+    const hex = "600000000400000001d300000000000002d3000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000d000000000000000800000000000000686f73742d6e6f74652e747874686f7374206f6c64";
     var bytes: [101]u8 = undefined;
     _ = try std.fmt.hexToBytes(&bytes, hex);
     var mock: ResourceMock = .{};

@@ -12,6 +12,8 @@ pub const Tag = struct {
     name: []const u8,
     /// What lies between the name and `>` (or `/>`).
     rest: []const u8 = "",
+    /// Where the tag's `<` is in the document.
+    start: usize = 0,
 
     pub fn attrs(t: Tag) Attrs {
         return .{ .s = t.rest };
@@ -21,6 +23,11 @@ pub const Tag = struct {
         var it = t.attrs();
         while (it.next()) |a| if (std.mem.eql(u8, a.name, name)) return a.value;
         return null;
+    }
+
+    /// `href`, or the older `xlink:href`.
+    pub fn href(t: Tag) ?[]const u8 {
+        return t.attr("href") orelse t.attr("xlink:href");
     }
 };
 
@@ -92,7 +99,7 @@ pub const Tags = struct {
             var n: usize = 0;
             while (n < body.len and !std.ascii.isWhitespace(body[n])) n += 1;
             if (n == 0) continue;
-            return .{ .kind = kind, .name = localName(body[0..n]), .rest = body[n..] };
+            return .{ .kind = kind, .name = localName(body[0..n]), .rest = body[n..], .start = lt };
         }
         return null;
     }
@@ -106,8 +113,8 @@ fn localName(n: []const u8) []const u8 {
 
 test "tags, attributes either quoted, and what's passed over" {
     var it: Tags = .{ .s =
-    \\<?xml version="1.0"?><!-- a > b --><svg viewBox='0 0 24 24' fill="none">
-    \\  <title>x &gt; y</title><path d="M0 0" stroke-width = "1.5"/></svg>
+        \\<?xml version="1.0"?><!-- a > b --><svg viewBox='0 0 24 24' fill="none">
+        \\  <title>x &gt; y</title><path d="M0 0" stroke-width = "1.5"/></svg>
     };
     const svg = it.next().?;
     try std.testing.expectEqual(Kind.open, svg.kind);

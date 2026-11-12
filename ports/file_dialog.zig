@@ -94,6 +94,32 @@ pub fn pickPng(allocator: std.mem.Allocator, owner: ?*anyopaque) !?[]u8 {
     return path;
 }
 
+pub fn pickDirectory(allocator: std.mem.Allocator, owner: ?*anyopaque) !?[]u8 {
+    if (builtin.os.tag != .windows) return error.UnsupportedPlatform;
+    const apartment = CoInitializeEx(null, 0x2 | 0x4);
+    if (apartment < 0) return error.ComApartmentMismatch;
+    defer CoUninitialize();
+    var instance: ?*anyopaque = null;
+    if (CoCreateInstance(&clsid_file_open_dialog, null, 1, &iid_file_open_dialog, &instance) < 0 or instance == null) return error.DialogCreateFailed;
+    const dialog: *Dialog = @ptrCast(@alignCast(instance.?));
+    defer _ = dialog.vtbl.Release(dialog);
+    if (dialog.vtbl.SetOptions(dialog, 0x20 | 0x40 | 0x800) < 0) return error.DialogOptionsFailed;
+    if (dialog.vtbl.SetTitle(dialog, std.unicode.utf8ToUtf16LeStringLiteral("选择本机目录")) < 0) return error.DialogTitleFailed;
+    const shown = dialog.vtbl.Show(dialog, owner);
+    if (shown == @as(i32, @bitCast(@as(u32, 0x800704C7)))) return null;
+    if (shown < 0) return error.DialogShowFailed;
+    var item: ?*Item = null;
+    if (dialog.vtbl.GetCurrentSelection(dialog, &item) < 0 or item == null) return error.DialogSelectionFailed;
+    defer _ = item.?.vtbl.Release(item.?);
+    var display_path: ?[*:0]u16 = null;
+    if (item.?.vtbl.GetDisplayName(item.?, 0x80028000, &display_path) < 0 or display_path == null) return error.DialogPathFailed;
+    defer CoTaskMemFree(@ptrCast(display_path));
+    const path = try std.unicode.utf16LeToUtf8Alloc(allocator, std.mem.span(display_path.?));
+    errdefer allocator.free(path);
+    if (!std.fs.path.isAbsolute(path) or path.len == 0) return error.InvalidDirectoryPath;
+    return path;
+}
+
 test "file dialog accepts only absolute PNG paths" {
     try validatePngPath("C:/assets/example.PNG");
     try std.testing.expectError(error.InvalidImagePath, validatePngPath("assets/example.png"));

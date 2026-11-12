@@ -6,13 +6,13 @@
 const std = @import("std");
 const surfaces = @import("surfaces.zig");
 const session = @import("session.zig");
-const command = @import("command.zig");
+const command = @import("vne").command;
 const tasks = @import("tasks.zig");
 const paths = @import("paths.zig");
 const config = @import("config.zig");
-const status = @import("status.zig");
+const status = @import("vne").status;
 const console = @import("console.zig");
-const documents = @import("documents.zig");
+const documents = @import("vne").documents;
 const history = @import("history.zig");
 const export_job = @import("export_job.zig");
 
@@ -27,13 +27,10 @@ pub const Context = struct {
     mounts: @import("vne").mounts.Table,
     external_sources: @import("external_sources.zig").Catalog,
     library: @import("resource_library.zig").Catalog,
-    library_view: @import("vne").library.View,
     devices: @import("vne").devices.Table,
     clock: @import("vne").clock.Clock,
     playback: @import("playback.zig").Playback,
-    playback_view: @import("vne").playback.View,
     assets: @import("assets.zig").Workspace,
-    asset_view: @import("vne").assets.View,
     history: history.History,
     config: config.Config,
     status: status.Status,
@@ -61,13 +58,10 @@ pub const Context = struct {
             .mounts = .{},
             .external_sources = .{},
             .library = .{},
-            .library_view = .{},
             .devices = .{},
             .clock = .{ .system = null },
             .playback = .{},
-            .playback_view = .{},
             .assets = .{},
-            .asset_view = .{},
             .history = undefined,
             .config = .{},
             .status = .{},
@@ -89,11 +83,8 @@ pub const Context = struct {
         self.tasks.reset();
         self.history.reset();
         self.playback.stop(self.allocator);
-        self.playback_view = .{};
-        self.asset_view.deinit(self.allocator);
         self.assets.deinit();
         self.devices.reset();
-        self.library_view.deinit(self.allocator);
         self.library.deinit(self.allocator);
         self.external_sources.deinit(self.allocator);
         self.mounts.deinit(self.allocator);

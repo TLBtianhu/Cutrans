@@ -21,8 +21,7 @@ stb_truetype(ImGui 自带,CPU 光栅化→GPU 图谱纹理,1.92 按需生长),�
 ## 再生成(改字符集/图标时)
 
 ```bash
-pip install fonttools
-python -m fontTools.subset scratch/fonts/NotoSansSC-full.ttf \
+uv run --with fonttools python -m fontTools.subset scratch/fonts/NotoSansSC-full.ttf \
   --text-file=charset.txt --output-file=NotoSansSC.ttf \
   --name-IDs=0,1,2,4,13,14 --name-legacy --name-languages='*' --layout-features=''
 # 图标改选:编辑 scratch/fonts/pick_icons.py 的名字表 → 跑一遍拿码位 →

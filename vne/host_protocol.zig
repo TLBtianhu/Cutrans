@@ -5,7 +5,7 @@ pub const version: u32 = 1;
 pub const max_message = 1024;
 pub const lifecycle_path = "session/vm-host.txt";
 
-pub const Action = enum { status, stop, rpc };
+pub const Action = enum { status, stop, prepare_stop, cancel_jobs, resume_work, rpc };
 pub const State = enum { starting, running, stopping, stopped, degraded };
 
 pub const Snapshot = struct {
@@ -33,6 +33,9 @@ pub fn writeAction(buffer: []u8, action: Action) ![]const u8 {
 pub fn parseAction(text: []const u8) !Action {
     if (std.mem.eql(u8, text, "cutrans_vm_host=1\ncommand=status\n")) return .status;
     if (std.mem.eql(u8, text, "cutrans_vm_host=1\ncommand=stop\n")) return .stop;
+    if (std.mem.eql(u8, text, "cutrans_vm_host=1\ncommand=prepare_stop\n")) return .prepare_stop;
+    if (std.mem.eql(u8, text, "cutrans_vm_host=1\ncommand=cancel_jobs\n")) return .cancel_jobs;
+    if (std.mem.eql(u8, text, "cutrans_vm_host=1\ncommand=resume_work\n")) return .resume_work;
     return error.InvalidHostRequest;
 }
 
@@ -68,7 +71,7 @@ pub fn parseSnapshot(text: []const u8) !Snapshot {
         const key = line[0..separator];
         const value = line[separator + 1 ..];
         const field = std.meta.stringToEnum(Field, key) orelse return error.InvalidHostSnapshot;
-        const index = @intFromEnum(field);
+        const index = @backingInt(field);
         if (seen[index]) return error.InvalidHostSnapshot;
         seen[index] = true;
         switch (field) {

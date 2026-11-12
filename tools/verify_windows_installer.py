@@ -130,10 +130,11 @@ def verify_installer_contract() -> None:
                 "PrivilegesRequired=lowest", "DisableProgramGroupPage=yes", "DisableReadyPage=yes",
                 'MessagesFile: "compiler:Languages\\ChineseSimplified.isl"',
                 'Parameters: "desktop --mode=installed"', "CUTRANS_INSTALL_PREFLIGHT_ONLY_OK",
-                "CUTRANS_UPGRADE_REJECTED", "OwnsRegistration", "BackupSystemState", "SafeParents",
-                "Source: \"{#InstalledContextFile}\"", "CloseApplications=no")
+                "CUTRANS_UPGRADE_REJECTED", "CUTRANS_UPGRADE_LEGACY_LAYOUT", "IsLegacyLayout", "OwnsRegistration", "BackupSystemState", "SafeParents",
+                "Source: \"{#PortableRoot}\\cutrans.exe\"", "CloseApplications=no")
     missing = [entry for entry in required if entry not in script]
-    forbidden = [entry for entry in ("PrivilegesRequiredOverridesAllowed", "LicenseFile=", "DisableWelcomePage=yes") if entry in script]
+    forbidden = [entry for entry in ("PrivilegesRequiredOverridesAllowed", "LicenseFile=", "DisableWelcomePage=yes",
+                                     "Source: \"{#InstalledContextFile}\"", "Source: \"{#InstalledVMManifestFile}\"") if entry in script]
     icons = script.split("[Icons]", 1)[1].split("[InstallDelete]", 1)[0]
     if icons.count('Name: "{autoprograms}\\{#ProductName}"') != 1:
         raise RuntimeError("installer must expose exactly one product entry")
@@ -213,14 +214,14 @@ def system_check(installer: Path, root: Path, proof: Path | None) -> None:
     try:
         result = run([*command, f"/LOG={root / 'install.log'}"])
         if result.returncode: raise RuntimeError("isolated installation failed; state retained, no automatic uninstall attempted")
-        expected = f'"{app / "app/cutrans_vm.exe"}" desktop --mode=installed --open "%1"'
+        expected = f'"{app / "app/cutrans.exe"}" desktop --mode=installed --open "%1"'
         if registry_value(winreg.HKEY_CURRENT_USER, COMMAND_KEY) != expected:
             raise RuntimeError("installed association does not point at the exact installed root")
         data = app / "data"
         # A normal installed Session must be created through the real entry
         # point before adding synthetic work. An arbitrary nonempty directory
         # is intentionally not accepted as legacy user data.
-        console = app / "app/cutrans_vm.exe"
+        console = app / "app/cutrans.exe"
         normal = ["--mode=installed", "--purpose=normal", f"--data={data}"]
         result = run([str(console), "start", *normal])
         if result.returncode:

@@ -7,7 +7,6 @@ import os
 import shutil
 import signal
 import sys
-import time
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -19,21 +18,15 @@ from verify_shell import start_and_verify
 ROOT = Path(__file__).resolve().parents[1]
 from build_paths import OUTPUT
 from verification_paths import default_root, claim, retain, remove, check_root
-from verification_context import canonical_path
 
 
 def attached_pid(shell: Path, data: Path, document: Path, mode: str) -> int:
-    expected = f'"{canonical_path(shell)}" --mode="{mode}" --purpose="verification" --data="{canonical_path(data)}" --open="{canonical_path(document)}"'
-    env = os.environ.copy()
-    env["CUTRANS_TEST_SHELL_COMMAND"] = expected
-    env["CUTRANS_TEST_SHELL_PATH"] = canonical_path(shell)
-    script = "$p=Get-CimInstance Win32_Process -Filter \"Name='cutrans_shell.exe'\" | Where-Object { $_.ExecutablePath -ieq $env:CUTRANS_TEST_SHELL_PATH -and $_.CommandLine -ieq $env:CUTRANS_TEST_SHELL_COMMAND } | Select-Object -First 1; if ($p) { $p.ProcessId }"
-    for _ in range(50):
-        output = run(["powershell", "-NoProfile", "-Command", script], env=env).strip()
-        if output:
-            return int(output)
-        time.sleep(0.1)
-    raise RuntimeError("attach did not produce the expected Shell process")
+    from process_identity import find_pid
+    result = find_pid(shell, data, mode, role="shell" if shell.name.casefold() == "cutrans.exe" else None,
+        document=document)
+    if result is None:
+        raise RuntimeError("attach did not produce the expected Shell process")
+    return result
 
 
 def _verify(console: Path, shell: Path, mode: str, root: Path) -> None:
@@ -65,18 +58,18 @@ def _verify(console: Path, shell: Path, mode: str, root: Path) -> None:
         _, current = invoke(console, "status", data, mode)
         assert current["state"] == "running" and current["boot"] == 1 and current["document"] == initial_document, current
 
-        start_and_verify(shell, document, data, mode, cleanup=False, settle_seconds=0.5)
+        start_and_verify(shell, document, data, mode, cleanup=False, settle_seconds=0.5, manage_host=False)
         _, current = invoke(console, "status", data, mode)
         assert current["state"] == "running" and current["boot"] == 1 and current["document"] == initial_document and current["present"] >= 1, current
 
-        start_and_verify(shell, document, data, mode, cleanup=False, assets_demo=True, settle_seconds=0.5)
+        start_and_verify(shell, document, data, mode, cleanup=False, assets_demo=True, settle_seconds=0.5, manage_host=False)
         _, current = invoke(console, "status", data, mode)
         assert current["state"] == "running" and current["boot"] == 1 and current["document"] != initial_document and current["present"] >= 2, current
         committed_lock = (data / "session/runtime.lock").read_text(encoding="utf-8")
         if "shell_id=desktop-shell" not in committed_lock:
             raise RuntimeError("a successful headless desktop did not commit its Shell identity")
 
-        start_and_verify(shell, document, data, mode, cleanup=False, playback_frames=4, settle_seconds=0.5)
+        start_and_verify(shell, document, data, mode, cleanup=False, playback_frames=4, settle_seconds=0.5, manage_host=False)
         _, current = invoke(console, "status", data, mode)
         assert current["state"] == "running" and current["boot"] == 1 and current["present"] >= 3, current
         lock_text = (data / "session/runtime.lock").read_text(encoding="utf-8")

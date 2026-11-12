@@ -1,7 +1,7 @@
 const std = @import("std");
 const vne = @import("vne");
 const RuntimeContext = @import("context.zig").Context;
-const command = @import("command.zig");
+const command = @import("vne").command;
 const image = @import("image.zig");
 const storage = @import("storage.zig");
 

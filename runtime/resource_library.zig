@@ -44,6 +44,16 @@ pub const WorkReceipt = struct {
     content_hash: [32]u8,
 };
 
+/// Persistent high-water marks let the bounded receipt ring evict old outcomes
+/// without ever executing an already-committed sequence again after restart.
+pub const WorkClient = struct {
+    client_hi: u64,
+    client_lo: u64,
+    high: u64,
+};
+
+pub const work_client_capacity: usize = 128;
+
 const WorkReceiptEntry = struct {
     client_hi: u64,
     client_lo: u64,
@@ -54,6 +64,12 @@ const WorkReceiptEntry = struct {
     work_revision: u64,
     draft_revision: u64,
     content_hash: []const u8,
+};
+
+const WorkClientEntry = struct {
+    client_hi: u64,
+    client_lo: u64,
+    high: u64,
 };
 
 pub const Node = union(enum) {
@@ -88,6 +104,7 @@ const Manifest = struct {
     folders: []FolderEntry = &.{},
     resources: []Entry,
     work_receipts: []WorkReceiptEntry = &.{},
+    work_clients: []WorkClientEntry = &.{},
 };
 
 fn hash(bytes: []const u8) [32]u8 {
@@ -129,6 +146,9 @@ pub const Catalog = struct {
     revision: u64 = 0,
     work_receipts: [@import("vne").resource_api.receipt_capacity]WorkReceipt = undefined,
     work_receipt_count: usize = 0,
+    work_receipt_next: usize = 0,
+    work_clients: [work_client_capacity]WorkClient = undefined,
+    work_client_count: usize = 0,
 
     const Mutation = struct {
         revision: u64,
@@ -199,6 +219,65 @@ pub const Catalog = struct {
         };
     }
 
+    /// Persistent sequence watermark for one Shell client. It outlives the
+    /// bounded receipt ring, so an evicted success can never execute twice.
+    pub fn clientHigh(self: *const Catalog, client_hi: u64, client_lo: u64) ?u64 {
+        for (self.work_clients[0..self.work_client_count]) |client| {
+            if (client.client_hi == client_hi and client.client_lo == client_lo) return client.high;
+        }
+        return null;
+    }
+
+    pub fn rememberClient(self: *Catalog, client_hi: u64, client_lo: u64, high: u64) void {
+        if (high == 0) return;
+        for (self.work_clients[0..self.work_client_count]) |*client| {
+            if (client.client_hi != client_hi or client.client_lo != client_lo) continue;
+            if (client.high < high) client.high = high;
+            return;
+        }
+        if (self.work_client_count < self.work_clients.len) {
+            self.work_clients[self.work_client_count] = .{ .client_hi = client_hi, .client_lo = client_lo, .high = high };
+            self.work_client_count += 1;
+            return;
+        }
+        // Keep the most recently observed clients. An evicted client with a
+        // sequence other than 1 is refused as bad_sequence, never executed.
+        var index: usize = 1;
+        while (index < self.work_clients.len) : (index += 1) self.work_clients[index - 1] = self.work_clients[index];
+        self.work_clients[self.work_clients.len - 1] = .{ .client_hi = client_hi, .client_lo = client_lo, .high = high };
+    }
+
+    const ReceiptMark = struct { count: usize, next: usize, replaced: ?WorkReceipt };
+
+    fn markReceipts(self: *const Catalog) ReceiptMark {
+        return .{
+            .count = self.work_receipt_count,
+            .next = self.work_receipt_next,
+            .replaced = if (self.work_receipt_count == self.work_receipts.len)
+                self.work_receipts[self.work_receipt_next]
+            else
+                null,
+        };
+    }
+
+    fn restoreReceipts(self: *Catalog, mark: ReceiptMark) void {
+        if (mark.replaced) |receipt| self.work_receipts[mark.next] = receipt;
+        self.work_receipt_count = mark.count;
+        self.work_receipt_next = mark.next;
+    }
+
+    fn recordWorkReceipt(self: *Catalog, receipt: WorkReceipt) void {
+        if (self.work_receipt_count < self.work_receipts.len) {
+            const index = self.work_receipt_count;
+            self.work_receipt_count += 1;
+            self.work_receipts[index] = receipt;
+        } else {
+            self.work_receipts[self.work_receipt_next] = receipt;
+            self.work_receipt_next = (self.work_receipt_next + 1) % self.work_receipts.len;
+        }
+        self.rememberClient(receipt.client_hi, receipt.client_lo, receipt.sequence);
+    }
+
     fn getMut(self: *Catalog, id: u64) ?*Resource {
         for (self.items[0..self.count]) |*item| {
             if (item.id == id) return item;
@@ -254,7 +333,7 @@ pub const Catalog = struct {
         const io = ctx.io orelse return error.IoNotReady;
         var out: std.ArrayList(u8) = .empty;
         defer out.deinit(ctx.allocator);
-        try appendFmt(&out, ctx.allocator, "{{\"format\":\"cutrans-resource-library/3\",\"next_id\":{d},\"next_draft_revision\":{d},\"folders\":[", .{ self.next_id, self.next_draft_revision });
+        try appendFmt(&out, ctx.allocator, "{{\"format\":\"cutrans-resource-library/4\",\"next_id\":{d},\"next_draft_revision\":{d},\"folders\":[", .{ self.next_id, self.next_draft_revision });
         for (self.folders[0..self.folder_count], 0..) |folder, index| {
             if (index != 0) try out.appendSlice(ctx.allocator, ",");
             try appendFmt(&out, ctx.allocator, "{{\"id\":{d},\"parent_id\":{d}", .{ folder.id, folder.parent_id });
@@ -288,6 +367,11 @@ pub const Catalog = struct {
             try appendJsonString(&out, ctx.allocator, "content_hash", &content_digest);
             try out.appendSlice(ctx.allocator, "}");
         }
+        try out.appendSlice(ctx.allocator, "],\"work_clients\":[");
+        for (self.work_clients[0..self.work_client_count], 0..) |client, index| {
+            if (index != 0) try out.appendSlice(ctx.allocator, ",");
+            try appendFmt(&out, ctx.allocator, "{{\"client_hi\":{d},\"client_lo\":{d},\"high\":{d}}}", .{ client.client_hi, client.client_lo, client.high });
+        }
         try out.appendSlice(ctx.allocator, "]}\n");
         const path = try ctx.paths.dataPath(ctx.allocator, catalog_path);
         defer ctx.allocator.free(path);
@@ -301,7 +385,6 @@ pub const Catalog = struct {
     fn appendInternal(self: *Catalog, ctx: *RuntimeContext, label: []const u8, kind: Kind, provenance: Provenance, source_uri: []const u8, content_hash: [32]u8, parent_id: u64, work_receipt: ?WorkReceipt) !u64 {
         const mutation = try self.prepareMutation(ctx, true);
         const next_id = try self.prepareAppend(label, parent_id);
-        if (work_receipt != null and self.work_receipt_count == self.work_receipts.len) return error.WorkReceiptLimit;
         const id = self.next_id;
         const owned_label = try ctx.allocator.dupe(u8, label);
         const owned_source = ctx.allocator.dupe(u8, source_uri) catch |err| {
@@ -326,11 +409,9 @@ pub const Catalog = struct {
         }
         self.next_id = next_id;
         errdefer self.next_id = id;
-        if (work_receipt) |receipt| {
-            self.work_receipts[self.work_receipt_count] = receipt;
-            self.work_receipt_count += 1;
-            errdefer self.work_receipt_count -= 1;
-        }
+        const receipt_mark = self.markReceipts();
+        errdefer self.restoreReceipts(receipt_mark);
+        if (work_receipt) |receipt| self.recordWorkReceipt(receipt);
         try self.save(ctx);
         mutation.publish(self, ctx);
         return id;
@@ -558,7 +639,6 @@ pub const Catalog = struct {
     }
 
     pub fn createWork(self: *Catalog, ctx: *RuntimeContext, label: []const u8, bytes: []const u8, envelope: WorkReceipt) !WorkReceipt {
-        if (self.work_receipt_count == self.work_receipts.len) return error.WorkReceiptLimit;
         _ = try self.prepareMutation(ctx, true);
         _ = try self.prepareAppend(label, 0);
         const id = self.next_id;
@@ -578,7 +658,6 @@ pub const Catalog = struct {
         if (item.kind != .owned) return error.ResourceNotReference;
         if (base_revision == 0 or base_revision > item.work_revision) return error.StaleWorkRevision;
         if (item.draft_revision != expected_draft or (expected_draft != 0 and item.draft_base_revision != base_revision)) return error.DraftConflict;
-        if (self.work_receipt_count == self.work_receipts.len) return error.WorkReceiptLimit;
         const token = self.next_draft_revision;
         const next_token = std.math.add(u64, token, 1) catch return error.DraftRevisionExhausted;
         const mutation = try self.prepareMutation(ctx, false);
@@ -602,9 +681,9 @@ pub const Catalog = struct {
         receipt.work_revision = item.work_revision;
         receipt.draft_revision = token;
         receipt.content_hash = item.content_hash;
-        self.work_receipts[self.work_receipt_count] = receipt;
-        self.work_receipt_count += 1;
-        errdefer self.work_receipt_count -= 1;
+        const receipt_mark = self.markReceipts();
+        errdefer self.restoreReceipts(receipt_mark);
+        self.recordWorkReceipt(receipt);
         try self.save(ctx);
         mutation.publish(self, ctx);
         return receipt;
@@ -615,7 +694,6 @@ pub const Catalog = struct {
         if (item.kind != .owned) return error.ResourceNotReference;
         if (expected_draft == 0 or item.draft_revision != expected_draft) return error.DraftConflict;
         if (item.draft_base_revision != item.work_revision) return error.StaleWorkRevision;
-        if (self.work_receipt_count == self.work_receipts.len) return error.WorkReceiptLimit;
         const next_revision = std.math.add(u64, item.work_revision, 1) catch return error.WorkRevisionExhausted;
         const mutation = try self.prepareMutation(ctx, true);
         const bytes = try self.readDraft(ctx, id);
@@ -642,9 +720,9 @@ pub const Catalog = struct {
         receipt.work_revision = next_revision;
         receipt.draft_revision = 0;
         receipt.content_hash = item.content_hash;
-        self.work_receipts[self.work_receipt_count] = receipt;
-        self.work_receipt_count += 1;
-        errdefer self.work_receipt_count -= 1;
+        const receipt_mark = self.markReceipts();
+        errdefer self.restoreReceipts(receipt_mark);
+        self.recordWorkReceipt(receipt);
         try self.save(ctx);
         mutation.publish(self, ctx);
         return receipt;
@@ -654,7 +732,6 @@ pub const Catalog = struct {
         const item = self.getMut(id) orelse return error.ResourceNotFound;
         if (item.kind != .owned) return error.ResourceNotReference;
         if (expected_draft == 0 or item.draft_revision != expected_draft) return error.DraftConflict;
-        if (self.work_receipt_count == self.work_receipts.len) return error.WorkReceiptLimit;
         const mutation = try self.prepareMutation(ctx, false);
         const previous_base = item.draft_base_revision;
         const previous_hash = item.draft_hash;
@@ -671,9 +748,9 @@ pub const Catalog = struct {
         receipt.work_revision = item.work_revision;
         receipt.draft_revision = 0;
         receipt.content_hash = item.content_hash;
-        self.work_receipts[self.work_receipt_count] = receipt;
-        self.work_receipt_count += 1;
-        errdefer self.work_receipt_count -= 1;
+        const receipt_mark = self.markReceipts();
+        errdefer self.restoreReceipts(receipt_mark);
+        self.recordWorkReceipt(receipt);
         try self.save(ctx);
         mutation.publish(self, ctx);
         return receipt;
@@ -816,10 +893,13 @@ pub const Catalog = struct {
         const manifest = parsed.value;
         const legacy = std.mem.eql(u8, manifest.format, "cutrans-resource-library/1");
         const legacy_v2 = std.mem.eql(u8, manifest.format, "cutrans-resource-library/2");
-        const current = std.mem.eql(u8, manifest.format, "cutrans-resource-library/3");
+        const current = std.mem.eql(u8, manifest.format, "cutrans-resource-library/3") or
+            std.mem.eql(u8, manifest.format, "cutrans-resource-library/4");
+        const with_clients = std.mem.eql(u8, manifest.format, "cutrans-resource-library/4");
         if ((!legacy and !legacy_v2 and !current) or manifest.next_id == 0 or manifest.next_draft_revision == 0 or
             manifest.resources.len > self.items.len or manifest.folders.len > self.folders.len or
-            manifest.work_receipts.len > self.work_receipts.len) return error.InvalidResourceLibrary;
+            manifest.work_receipts.len > self.work_receipts.len or
+            manifest.work_clients.len > self.work_clients.len) return error.InvalidResourceLibrary;
         // Administrative high-water marks never move backwards during a reload.
         var next: Catalog = .{
             .next_id = @max(self.next_id, manifest.next_id),
@@ -911,6 +991,15 @@ pub const Catalog = struct {
                 .content_hash = content_digest,
             };
             next.work_receipt_count += 1;
+            next.rememberClient(entry.client_hi, entry.client_lo, entry.sequence);
+        }
+        next.work_receipt_next = next.work_receipt_count % next.work_receipts.len;
+        if (with_clients) {
+            for (manifest.work_clients) |entry| {
+                if ((entry.client_hi == 0 and entry.client_lo == 0) or entry.high == 0) return error.InvalidResourceLibrary;
+                if (next.clientHigh(entry.client_hi, entry.client_lo) == null and next.work_client_count == next.work_clients.len) return error.InvalidResourceLibrary;
+                next.rememberClient(entry.client_hi, entry.client_lo, entry.high);
+            }
         }
         next.validateHierarchy() catch return error.InvalidResourceLibrary;
         self.deinit(ctx.allocator);
@@ -934,7 +1023,7 @@ fn idAndLabel(text: ?[]const u8) !struct { id: u64, label: []const u8 } {
     return .{ .id = id, .label = label };
 }
 
-pub fn dispatch(c: @import("command.zig").Command, opaque_ptr: *anyopaque) @import("command.zig").Result {
+pub fn dispatch(c: @import("vne").command.Command, opaque_ptr: *anyopaque) @import("vne").command.Result {
     const ctx: *RuntimeContext = @ptrCast(@alignCast(opaque_ptr));
     if (std.mem.eql(u8, c.name, "library.folder.create")) {
         const parsed = idAndLabel(c.arg) catch return .failure(.invalid_arguments);
@@ -1405,6 +1494,23 @@ test "same Runtime restore keeps the highest issued resource identity" {
     try reopened.library.restore(&reopened);
     try std.testing.expectEqual(replacement + 1, reopened.library.next_id);
     try std.testing.expect(reopened.library.getFolder(replacement) != null);
+}
+
+test "catalog v3 without work_clients still restores" {
+    var tc = try LibraryCase.init();
+    defer tc.deinit();
+    var ctx: RuntimeContext = undefined;
+    try tc.open(&ctx);
+    defer ctx.deinit();
+    const legacy =
+        \\{"format":"cutrans-resource-library/3","next_id":1,"next_draft_revision":1,"folders":[],"resources":[],"work_receipts":[]}
+        \\
+    ;
+    try storage.writeAtomic(std.Io.Dir.cwd(), std.testing.io, tc.catalog, legacy);
+    try ctx.library.restore(&ctx);
+    try std.testing.expectEqual(@as(u64, 1), ctx.library.next_id);
+    try std.testing.expectEqual(@as(usize, 0), ctx.library.count);
+    try std.testing.expectEqual(@as(usize, 0), ctx.library.work_client_count);
 }
 
 test "same Runtime restore invalidates Station ownership projections before IO overflow" {

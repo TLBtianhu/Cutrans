@@ -196,7 +196,7 @@ def install_inno(work: Path, opener, force: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--proxy", help="optional HTTP/HTTPS proxy, for example http://127.0.0.1:7897")
+    parser.add_argument("--proxy", help="optional HTTP/HTTPS proxy, for example http://127.0.0.1:7890")
     parser.add_argument("--force", action="store_true", help="replace existing files whose hashes differ")
     parser.add_argument("--installer-tool", action="store_true", help="restore portable Inno Setup for the installer build")
     args = parser.parse_args()

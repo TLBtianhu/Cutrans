@@ -24,9 +24,10 @@ const Theme = @import("theme.zig").Theme;
 const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 const View = @import("ui.zig").View;
-const trace = @import("trace.zig");
 
-const runFor = @import("../platform.zig").runFor;
+const platform = @import("../platform.zig");
+const runFor = platform.runFor;
+const script = @import("tester_script.zig");
 
 pub const Options = struct {
     width: f32 = 480,
@@ -35,10 +36,6 @@ pub const Options = struct {
     dark: bool = false,
     /// Colors of its own, as a window's `theme` option gives.
     theme: ?Theme = null,
-    /// Where the font scan's index is cached and which folder it describes
-    /// (`ui.App`'s options of the same names). Both null: no cache.
-    font_cache: ?[]const u8 = null,
-    fonts_dir: ?[]const u8 = null,
 };
 
 pub const Tester = struct {
@@ -57,10 +54,32 @@ pub const Tester = struct {
     clipboard: std.ArrayList(u8) = .empty,
     /// The simulated clock, advanced by `dt` each frame.
     time: f64 = 0,
+    /// The app's own script steps (`cmd:…`), tried after nanoui's.
+    app_verbs: ?AppVerbs = null,
+    /// Another thread asked for a frame (`requestFrameFromAnyThread`).
+    woken: std.atomic.Value(bool) = .init(false),
+
+    /// A script step nanoui doesn't know, offered to the app: true if it
+    /// ran it (`op` is before the colon, `arg` after).
+    pub const AppVerbs = struct {
+        ctx: ?*anyopaque = null,
+        run: *const fn (ctx: ?*anyopaque, t: *Tester, op: []const u8, arg: []const u8) anyerror!bool,
+    };
 
     /// Initializes in place (the context points into the tester) and runs
     /// the first frame.
     pub fn init(t: *Tester, gpa: std.mem.Allocator, view: View, opts: Options) !void {
+        if (@import("../rt.zig").enabled) {
+            const Ext = struct {
+                extern fn nanoui_rt_tester_init(t: *Tester, gpa_ptr: *const std.mem.Allocator, view_ptr: *const View, opts_ptr: *const Options) callconv(.c) u8;
+            };
+            if (Ext.nanoui_rt_tester_init(t, &gpa, &view, &opts) != 0) return error.TesterInitFailed;
+            return;
+        }
+        return t.initImpl(gpa, view, opts);
+    }
+
+    pub fn initImpl(t: *Tester, gpa: std.mem.Allocator, view: View, opts: Options) !void {
         var renderer: metal.Renderer = if (portable) {} else try metal.Renderer.init();
         errdefer if (!portable) renderer.deinit();
         t.* = .{
@@ -74,13 +93,22 @@ pub const Tester = struct {
             .theme = opts.theme orelse if (opts.dark) Theme.dark_theme else Theme.light,
         };
         t.text.setScale(opts.scale);
-        t.text.db.cache_path = opts.font_cache;
-        t.text.db.fonts_dir = opts.fonts_dir;
         t.ctx = .init(gpa, &t.text);
         t.ctx.clipboard = .{ .ctx = t, .write = clipWrite };
-        trace.mark("tester.text");
+        t.ctx.waker = .{ .ctx = t, .wake = wakeFrom };
         t.frame();
-        trace.mark("tester.frame");
+    }
+
+    fn wakeFrom(ctx: *anyopaque) void {
+        const t: *Tester = @ptrCast(@alignCast(ctx));
+        t.requestFrameFromAnyThread();
+    }
+
+    /// From any thread (a decoder's): a frame is wanted. `pump` returns
+    /// early to run it.
+    pub fn requestFrameFromAnyThread(t: *Tester) void {
+        if (t.woken.swap(true, .acq_rel)) return;
+        platform.wakeMain();
     }
 
     fn clipWrite(ctx: ?*anyopaque, text_: []const u8) void {
@@ -90,6 +118,16 @@ pub const Tester = struct {
     }
 
     pub fn deinit(t: *Tester) void {
+        if (@import("../rt.zig").enabled) {
+            const Ext = struct {
+                extern fn nanoui_rt_tester_deinit(t: *Tester) callconv(.c) void;
+            };
+            return Ext.nanoui_rt_tester_deinit(t);
+        }
+        t.deinitImpl();
+    }
+
+    pub fn deinitImpl(t: *Tester) void {
         t.clipboard.deinit(t.gpa);
         t.instances.deinit(t.gpa);
         t.ctx.deinit();
@@ -98,6 +136,16 @@ pub const Tester = struct {
     }
 
     pub fn frame(t: *Tester) void {
+        if (@import("../rt.zig").enabled) {
+            const Ext = struct {
+                extern fn nanoui_rt_tester_frame(t: *Tester) callconv(.c) void;
+            };
+            return Ext.nanoui_rt_tester_frame(t);
+        }
+        t.frameImpl();
+    }
+
+    pub fn frameImpl(t: *Tester) void {
         _ = frame_mod.run(&t.ctx, t.view, &t.text, &t.instances, t.size, t.scale, t.theme, t.dt, t.time);
         // The simulated clock is the real one here: a view reads its rate off it.
         t.ctx.frame_time = t.dt;
@@ -169,6 +217,28 @@ pub const Tester = struct {
         t.frame();
     }
 
+    /// The pointer goes down at (x, y) and stays down (`move`, `up`), with
+    /// the modifier keys `setMods` left.
+    pub fn down(t: *Tester, x: f32, y: f32) void {
+        t.moveTo(x, y);
+        t.ctx.input.click_count = 1;
+        t.ctx.pointerDown();
+        t.frame();
+    }
+
+    /// The pointer moves to (x, y), held down or not.
+    pub fn move(t: *Tester, x: f32, y: f32) void {
+        t.ctx.input.mouse = .{ .x = x, .y = y };
+        if (!t.ctx.input.down) t.ctx.updateHot();
+        t.frame();
+    }
+
+    pub fn up(t: *Tester) void {
+        t.ctx.pointerUp();
+        t.frame();
+        t.ctx.updateHot();
+    }
+
     pub fn typeText(t: *Tester, s: []const u8) void {
         t.ctx.input.chars = s;
         t.frame();
@@ -200,7 +270,7 @@ pub const Tester = struct {
         t.ctx.input.mouse = .{ .x = x, .y = y };
         if (t.ctx.applyScroll(dy)) {
             t.frame();
-        } else if (t.ctx.wants_wheel) {
+        } else if (t.ctx.wants_wheel or t.ctx.wheelAt()) {
             t.ctx.input.scroll = .{ .y = dy };
             t.frame();
         }
@@ -280,10 +350,35 @@ pub const Tester = struct {
         return false;
     }
 
+    /// Puts the pointer on the middle of text `s`, without a click.
+    pub fn hoverText(t: *Tester, s: []const u8) !void {
+        const r = t.findText(s) orelse return error.TextNotFound;
+        t.moveTo(r.x + r.w / 2, r.y + r.h / 2);
+    }
+
+    /// The tooltip in the last frame (empty text for custom drawn content).
+    pub fn tooltipText(t: *Tester) ?[]const u8 {
+        return if (t.ctx.tooltip.shown) |s| s.text else null;
+    }
+
+    pub fn tooltipRect(t: *Tester) ?types.Rect {
+        const s = t.ctx.tooltip.shown orelse return null;
+        return t.ctx.rects.get(s.id);
+    }
+
     /// Clicks the middle of the text `s`.
     pub fn clickText(t: *Tester, s: []const u8) !void {
         const r = t.findText(s) orelse return error.TextNotFound;
         t.click(r.x + r.w / 2, r.y + r.h / 2);
+    }
+
+    /// Runs the real event loop for `seconds` (replies, timers, work posted
+    /// to the main queue from other threads), then a frame; sooner if
+    /// another thread asks for a frame (`requestFrameFromAnyThread`).
+    pub fn pump(t: *Tester, seconds: f64) void {
+        platform.runUntil(seconds, &t.woken);
+        t.woken.store(false, .release);
+        t.frame();
     }
 
     /// Renders the last frame offscreen and writes it to a PNG file.
@@ -299,68 +394,24 @@ pub const Tester = struct {
     pub fn render(t: *Tester, gpa: std.mem.Allocator) !gpu.Pixels {
         if (!portable) t.renderer.syncImages(&t.text.images);
         if (!portable) t.renderer.textures = t.ctx.textures.items;
-        if (!portable) return t.renderer.drawOffscreen(gpa, t.instances.items, t.text.texture(), t.size, t.scale, t.theme.background);
+        if (!portable) t.renderer.gradients = t.ctx.gradients.items;
+        if (!portable) return t.renderer.drawOffscreen(gpa, t.instances.items, t.text.texture(), t.size, t.scale, t.ctx.theme.background);
         const w: usize = @intFromFloat(@max(1, @round(t.size.w * t.scale)));
         const h: usize = @intFromFloat(@max(1, @round(t.size.h * t.scale)));
         const out: gpu.Pixels = .{ .bytes = try gpa.alloc(u8, w * h * 4), .width = w, .height = h };
         var pictures = t.text.images.pictures();
         pictures.textures = t.ctx.textures.items;
-        raster.draw(out, t.instances.items, t.text.atlas.mask(), pictures, t.scale, t.theme.background);
+        pictures.gradients = t.ctx.gradients.items;
+        raster.draw(out, t.instances.items, t.text.atlas.mask(), pictures, t.scale, t.ctx.theme.background);
         return out;
     }
 
-    /// Runs a script of steps separated by `;`: `click:TEXT`, `move:TEXT`,
-    /// `type:TEXT`, `key:enter|backspace|tab|escape|left|right`,
-    /// `scroll:DY` (at the pointer), `wait:SECONDS` (simulated time),
-    /// `live:SECONDS` (the real event loop: replies, processes, timers),
-    /// `resize:WxH`; `at:X,Y` and `hover:X,Y` (a click, or the pointer, at
-    /// points), `chord:cmd+shift+n` (a key combination, as a window offers
-    /// it), `snap:PNG` (the frame so far, written: one per step of a run).
-    pub fn runScript(t: *Tester, script: []const u8) !void {
-        var steps = std.mem.splitScalar(u8, script, ';');
-        while (steps.next()) |raw| {
-            const step = std.mem.trim(u8, raw, " ");
-            if (step.len == 0) continue;
-            const colon = std.mem.indexOfScalar(u8, step, ':') orelse step.len;
-            const op = step[0..colon];
-            const arg = if (colon < step.len) step[colon + 1 ..] else "";
-            if (std.mem.eql(u8, op, "click")) {
-                try t.clickText(arg);
-            } else if (std.mem.eql(u8, op, "move")) {
-                const r = t.findText(arg) orelse return error.TextNotFound;
-                t.moveTo(r.x + r.w / 2, r.y + r.h / 2);
-            } else if (std.mem.eql(u8, op, "type")) {
-                t.typeText(arg);
-            } else if (std.mem.eql(u8, op, "key")) {
-                t.key(std.meta.stringToEnum(ctx_mod.Key, arg) orelse return error.UnknownKey);
-            } else if (std.mem.eql(u8, op, "scroll")) {
-                t.scroll(t.ctx.input.mouse.x, t.ctx.input.mouse.y, try std.fmt.parseFloat(f32, arg));
-            } else if (std.mem.eql(u8, op, "wait")) {
-                t.advance(try std.fmt.parseFloat(f32, arg));
-            } else if (std.mem.eql(u8, op, "live")) {
-                const seconds = try std.fmt.parseFloat(f64, arg);
-                var waited: f64 = 0;
-                while (waited < seconds) : (waited += 0.05) {
-                    runFor(0.05);
-                    t.frame();
-                }
-            } else if (std.mem.eql(u8, op, "at") or std.mem.eql(u8, op, "hover")) {
-                const comma = std.mem.indexOfScalar(u8, arg, ',') orelse return error.BadPoint;
-                const x = try std.fmt.parseFloat(f32, std.mem.trim(u8, arg[0..comma], " "));
-                const y = try std.fmt.parseFloat(f32, std.mem.trim(u8, arg[comma + 1 ..], " "));
-                if (op[0] == 'a') t.click(x, y) else t.moveTo(x, y);
-            } else if (std.mem.eql(u8, op, "chord")) {
-                const s = ctx_mod.Shortcut.parse(arg) orelse return error.UnknownKey;
-                _ = t.shortcut(s.native());
-            } else if (std.mem.eql(u8, op, "snap")) {
-                t.settle(2);
-                try t.screenshot(arg);
-                continue;
-            } else if (std.mem.eql(u8, op, "resize")) {
-                const x = std.mem.indexOfScalar(u8, arg, 'x') orelse return error.BadSize;
-                t.resize(try std.fmt.parseFloat(f32, arg[0..x]), try std.fmt.parseFloat(f32, arg[x + 1 ..]));
-            } else return error.UnknownStep;
-            t.settle(2);
-        }
+    /// Runs a script of steps separated by `;` (`tester_script.zig` lists
+    /// them): `click:TEXT`, `at:X,Y`, `down:X,Y`/`move:X,Y`/`up`,
+    /// `mods:cmd+shift`, `drop:X,Y,PATH|PATH`, `type:TEXT`, `key:enter`,
+    /// `chord:cmd+shift+n`, `wait:SECONDS`, `snap:PNG`, and the app's own
+    /// (`app_verbs`).
+    pub fn runScript(t: *Tester, steps: []const u8) !void {
+        return script.run(t, steps);
     }
 };

@@ -1,14 +1,13 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
-const runtime = @import("runtime");
+
 const vm_client = @import("vm_client");
 const palette = @import("palette");
 
 const ui = nanoui.ui;
 
 pub const State = struct {
-    ctx: *runtime.context.Context,
-    preview: runtime.render.Preview = .{},
+    ctx: *vm_client.Context,
     pixels: []u8 = &.{},
     pixel_generation: u64 = 0,
     gain: ui.TextBuffer = .{},
@@ -21,7 +20,7 @@ pub const State = struct {
     export_path: ui.TextBuffer = .{},
     last_task_id: ?u64 = null,
 
-    pub fn init(ctx: *runtime.context.Context) State {
+    pub fn init(ctx: *vm_client.Context) State {
         var self: State = .{ .ctx = ctx };
         const doc = &ctx.document;
         if (doc.firstGainId()) |id| {
@@ -49,7 +48,6 @@ pub const State = struct {
     }
 
     pub fn deinit(self: *State) void {
-        self.preview.deinit(self.ctx.allocator);
         if (self.pixels.len > 0) self.ctx.allocator.free(self.pixels);
         self.pixels = &.{};
         self.gain.deinit();
@@ -66,11 +64,11 @@ pub const State = struct {
         self.ctx.status.set(@errorName(err));
     }
 
-    fn require(result: runtime.command.Result) !void {
+    fn require(result: @import("vne").command.Result) !void {
         if (result.code != .ok and result.code != .accepted) return error.CommandFailed;
     }
 
-    fn dispatch(self: *State, name: []const u8, arg: ?[]const u8) runtime.command.Result {
+    fn dispatch(self: *State, name: []const u8, arg: ?[]const u8) @import("vne").command.Result {
         return self.ctx.command.dispatch(.{ .name = name, .arg = arg });
     }
 
@@ -82,15 +80,18 @@ pub const State = struct {
     }
 
     pub fn importExternal(self: *State, path: []const u8) !void {
-        const handle = try vm_client.openExternal(self.ctx, path);
+        const id = try vm_client.registerExternal(self.ctx, path);
+        try vm_client.syncLibrary(self.ctx);
+        const item = self.ctx.library_view.findResource(id) orelse return error.LibraryMirrorMissing;
+        const handle = try vm_client.ensureLibraryAsset(self.ctx, id, item.content_hash);
         try self.insertHandle(handle);
     }
 
     pub fn pickExternal(self: *State) !void {
         const selected = try nanoui.dialog.open(self.ctx.allocator, .{
-            .title = "导入 PNG 到当前文档",
+            .title = "从本机导入到当前文档",
             .button = "导入",
-            .extensions = &.{"png"},
+            .extensions = &.{},
         });
         if (selected) |paths| {
             defer nanoui.dialog.freePaths(self.ctx.allocator, paths);
@@ -149,7 +150,7 @@ pub const State = struct {
         }
     }
 
-    fn convert(self: *State, frame: *const runtime.render.Frame) !void {
+    fn convert(self: *State, frame: *const vm_client.Frame) !void {
         if (self.pixel_generation == frame.generation and self.pixels.len == frame.pixels.len) return;
         const next = try self.ctx.allocator.alloc(u8, frame.pixels.len);
         errdefer self.ctx.allocator.free(next);
@@ -176,11 +177,12 @@ pub const State = struct {
             return;
         }
         const doc = &self.ctx.document;
-        const frame = self.preview.currentWithProvider(doc, self.ctx.allocator, vm_client.sourceProvider(self.ctx)) catch |err| {
-            ui.textf(c, .{ .color = c.theme.danger }, "当前文档无法求值：{s}", .{@errorName(err)});
+        var frame = vm_client.previewFrame(self.ctx, doc.fingerprint(), self.ctx.allocator) catch |err| {
+            ui.textf(c, .{ .color = c.theme.danger }, "当前文档无法取得 VM 预览：{s}", .{@errorName(err)});
             return;
         };
-        self.convert(frame) catch |err| {
+        defer frame.deinit(self.ctx.allocator);
+        self.convert(&frame) catch |err| {
             ui.textf(c, .{ .color = c.theme.danger }, "预览像素转换失败：{s}", .{@errorName(err)});
             return;
         };
@@ -197,9 +199,9 @@ pub const State = struct {
             return;
         }
         if (self.ctx.playback_view.currentOffer()) |t| {
-            self.ctx.devices.frame_sink.offerAt(frame, doc.fingerprint(), t);
+            self.ctx.devices.frame_sink.offerAt(&frame, doc.fingerprint(), t);
         } else {
-            self.ctx.devices.frame_sink.offer(frame, doc.fingerprint());
+            self.ctx.devices.frame_sink.offer(&frame, doc.fingerprint());
         }
     }
 
@@ -284,13 +286,13 @@ pub const State = struct {
 };
 
 test "editor preview conversion produces premultiplied BGRA" {
-    var ctx: runtime.context.Context = undefined;
+    var ctx: vm_client.Context = undefined;
     ctx.init(std.testing.allocator);
     defer ctx.deinit();
     var state: State = .{ .ctx = &ctx };
     defer state.deinit();
     var source = [_]u8{ 200, 100, 50, 128 };
-    const frame = runtime.render.Frame{ .width = 1, .height = 1, .generation = 7, .pixels = &source };
+    const frame = vm_client.Frame{ .width = 1, .height = 1, .generation = 7, .pixels = &source };
     try state.convert(&frame);
     try std.testing.expectEqualSlices(u8, &.{ 25, 50, 100, 128 }, state.pixels);
 }

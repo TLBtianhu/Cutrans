@@ -162,17 +162,22 @@ pub const App = struct {
         activity.finish();
     }
 
-    /// From any thread: calls `func(ctx)` on the app's thread soon.
-    pub fn onMain(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
-        calls.after(0, ctx, func);
+    /// From any thread: calls `func(ctx)` on the app's thread soon. False
+    /// when it never will (the queue is not open, or out of memory), as on
+    /// Windows.
+    pub fn onMain(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) bool {
+        return calls.after(0, ctx, func);
     }
+
+    /// iPad's New Window (`ios/scenes.zig`): the system doesn't ask for windows here.
+    pub fn onNewWindow(_: *App, _: *anyopaque, _: *const fn (ctx: *anyopaque, app: *App) void) void {}
 
     /// Files the system opens with the app: not taken on Android yet.
     pub fn onOpenFiles(_: *App, _: *anyopaque, _: *const fn (ctx: *anyopaque, paths: []const []const u8) void) void {}
 
     /// Calls `func(ctx)` on the app's thread after `ms` milliseconds.
     pub fn after(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
-        calls.after(ms, ctx, func);
+        _ = calls.after(ms, ctx, func);
     }
 
     /// Menus become the accelerators of a hardware keyboard.

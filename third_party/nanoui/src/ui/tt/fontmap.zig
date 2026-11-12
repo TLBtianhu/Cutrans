@@ -1,86 +1,111 @@
-//! A font file's bytes, without copying them when the platform can map.
-//!
-//! Why this exists: a CJK collection is ~20 MB, and a window that shapes one
-//! hanzi needs a few hundred kilobytes of it. `readFileAlloc` therefore charged
-//! the whole file to the process's private pages; a read-only view charges only
-//! the pages the parser (and DirectWrite, which borrows the same bytes) touch —
-//! measured at 74.8 → 55.6 MiB of working set for the real window in `PERF.md`
-//! §11, with the 19.7 MB `msyh.ttc` itself costing ~0.5 MiB resident.
-//!
-//! The mapping is released with `freeBytes`; on platforms without a mapping the
-//! caller reads the file and gets the same `Bytes` with `mapped = false`.
+//! A font file's owned heap bytes on every target. File-backed pages are not
+//! immutable while a font is updated in place; on Windows a live mapping also
+//! blocks truncation with ERROR_USER_MAPPED_FILE. A private copy avoids both.
 const std = @import("std");
 const builtin = @import("builtin");
 
-/// A face's bytes, and whether they are a read-only file mapping rather than a
-/// heap copy.
-pub const Bytes = struct { data: []u8, mapped: bool = false };
+pub const Bytes = struct {
+    data: []const u8,
+};
 
-const invalid_handle: usize = ~@as(usize, 0);
-
-extern "kernel32" fn CreateFileW(path: [*]const u16, access: u32, share: u32, sec: ?*anyopaque, disposition: u32, flags: u32, template: ?*anyopaque) callconv(.winapi) usize;
-extern "kernel32" fn CreateFileMappingW(file: usize, sec: ?*anyopaque, protect: u32, high: u32, low: u32, name: ?*const u16) callconv(.winapi) usize;
-extern "kernel32" fn MapViewOfFile(mapping: usize, access: u32, high: u32, low: u32, bytes: usize) callconv(.winapi) ?*anyopaque;
-extern "kernel32" fn UnmapViewOfFile(addr: ?*const anyopaque) callconv(.winapi) i32;
-extern "kernel32" fn GetFileSizeEx(file: usize, size: *i64) callconv(.winapi) i32;
-extern "kernel32" fn CloseHandle(handle: usize) callconv(.winapi) i32;
-
-/// A read-only mapping of `path`, or null when this platform (or this path)
-/// cannot be mapped — the caller then reads the file.
-pub fn mapFile(path: []const u8) ?Bytes {
-    if (builtin.os.tag != .windows or path.len == 0 or path.len > 1000) return null;
-    var wide: [1001]u16 = undefined;
-    const len = std.unicode.utf8ToUtf16Le(wide[0..path.len], path) catch return null;
-    wide[len] = 0;
-    // GENERIC_READ, share read|delete, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL.
-    const file = CreateFileW(&wide, 0x80000000, 0x1 | 0x4, null, 3, 0x80, null);
-    if (file == invalid_handle) return null;
-    defer _ = CloseHandle(file);
-    var size: i64 = 0;
-    if (GetFileSizeEx(file, &size) == 0 or size <= 0) return null;
-    const mapping = CreateFileMappingW(file, null, 2, 0, 0, null); // PAGE_READONLY
-    if (mapping == 0) return null;
-    const view = MapViewOfFile(mapping, 4, 0, 0, 0) orelse { // FILE_MAP_READ
-        _ = CloseHandle(mapping);
-        return null;
+/// Reads `path` into storage owned until `freeBytes`.
+pub fn readFile(io: std.Io, gpa: std.mem.Allocator, path: []const u8) !Bytes {
+    return .{
+        .data = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(256 << 20)),
     };
-    // The view keeps both alive; the handles go now so nothing leaks one (a
-    // mapped file still can't be deleted until it is unmapped).
-    _ = CloseHandle(mapping);
-    const bytes: [*]u8 = @ptrCast(view);
-    return .{ .data = bytes[0..@intCast(size)], .mapped = true };
 }
 
-/// Releases a face's bytes: an unmap for a mapping, a free for a copy. The
-/// unmap is inside a compile-time platform test, so a Linux or Android build
-/// never references kernel32 (the fork this came from was Windows-only).
-pub fn freeBytes(gpa: std.mem.Allocator, bytes: Bytes) void {
-    if (builtin.os.tag == .windows) {
-        if (bytes.mapped) {
-            _ = UnmapViewOfFile(bytes.data.ptr);
-            return;
-        }
-    }
-    gpa.free(bytes.data);
+pub fn freeBytes(io: std.Io, gpa: std.mem.Allocator, bytes: *Bytes) void {
+    _ = io;
+    gpa.free(@constCast(bytes.data));
+    bytes.* = undefined;
 }
 
-const testing = std.testing;
-
-test "mapping a file gives its bytes; a missing path gives null" {
-    var tmp = testing.tmpDir(.{});
+test "font reads are exact and release twenty times" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const text = "not a font, only bytes";
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "plain.ttf", .data = text });
-    var dir_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_len = try tmp.dir.realPath(testing.io, &dir_buffer);
-    var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buffer, "{s}{c}plain.ttf", .{ dir_buffer[0..dir_len], std.fs.path.sep });
-    const bytes = mapFile(path) orelse {
-        if (builtin.os.tag != .windows) return error.SkipZigTest;
-        return error.MappingFailed;
-    };
-    defer freeBytes(testing.allocator, bytes);
-    try testing.expectEqualStrings(text, bytes.data);
-    try testing.expect(bytes.mapped);
-    try testing.expect(mapFile("no such file anywhere.ttf") == null);
+    const text = "read-only font mapping bytes";
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "plain.ttf", .data = text });
+    var root_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root_len = try tmp.dir.realPath(std.testing.io, &root_buf);
+    const path = try std.fs.path.join(gpa, &.{ root_buf[0..root_len], "plain.ttf" });
+    defer gpa.free(path);
+
+    // The testing allocator also proves that every iteration releases its copy.
+    for (0..20) |_| {
+        var bytes = try readFile(std.testing.io, gpa, path);
+        defer freeBytes(std.testing.io, gpa, &bytes);
+        try std.testing.expectEqualStrings(text, bytes.data);
+    }
+    var heap = try readFile(std.testing.io, gpa, path);
+    defer freeBytes(std.testing.io, gpa, &heap);
+    try std.testing.expectEqualStrings(text, heap.data);
+    try std.testing.expectError(error.FileNotFound, readFile(std.testing.io, gpa, "no such font anywhere.ttf"));
+}
+
+test "heap fonts survive an in-place replacement" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "same.ttf", .data = "the original font bytes" });
+    var root_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root_len = try tmp.dir.realPath(std.testing.io, &root_buf);
+    const path = try std.fs.path.join(gpa, &.{ root_buf[0..root_len], "same.ttf" });
+    defer gpa.free(path);
+    var bytes = try readFile(std.testing.io, gpa, path);
+    defer freeBytes(std.testing.io, gpa, &bytes);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "same.ttf", .data = "tiny" });
+    try std.testing.expectEqualStrings("the original font bytes", bytes.data);
+}
+
+test "Windows can uninstall and replace a font while its bytes are live" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "same.ttf", .data = "old installed font" });
+    var root_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root_len = try tmp.dir.realPath(std.testing.io, &root_buf);
+    const path = try std.fs.path.join(gpa, &.{ root_buf[0..root_len], "same.ttf" });
+    defer gpa.free(path);
+    var old = try readFile(std.testing.io, gpa, path);
+    defer freeBytes(std.testing.io, gpa, &old);
+
+    try std.Io.Dir.cwd().deleteFile(std.testing.io, path);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, path, .{}));
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "same.ttf", .data = "new installed font" });
+    try std.testing.expectEqualStrings("old installed font", old.data);
+    var new = try readFile(std.testing.io, gpa, path);
+    defer freeBytes(std.testing.io, gpa, &new);
+    try std.testing.expectEqualStrings("new installed font", new.data);
+}
+
+test "font reads survive direct in-place replacement twenty times" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const old_text = "old installed font";
+    const new_text = "new installed font";
+    try std.testing.expectEqual(old_text.len, new_text.len);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "same.ttf", .data = old_text });
+    var root_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root_len = try tmp.dir.realPath(std.testing.io, &root_buf);
+    const path = try std.fs.path.join(gpa, &.{ root_buf[0..root_len], "same.ttf" });
+    defer gpa.free(path);
+
+    for (0..20) |i| {
+        const before = if (i % 2 == 0) old_text else new_text;
+        const after = if (i % 2 == 0) new_text else old_text;
+        var old = try readFile(std.testing.io, gpa, path);
+        defer freeBytes(std.testing.io, gpa, &old);
+        try std.testing.expectEqualStrings(before, old.data);
+
+        // No unlink or rename: this is the same truncation a font update uses.
+        try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = after });
+        try std.testing.expectEqualStrings(before, old.data);
+        var new = try readFile(std.testing.io, gpa, path);
+        defer freeBytes(std.testing.io, gpa, &new);
+        try std.testing.expectEqualStrings(after, new.data);
+    }
 }

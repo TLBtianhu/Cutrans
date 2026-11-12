@@ -27,7 +27,38 @@ pub const Options = struct {
     on_continue_activity: ?*const fn (ctx: ?*anyopaque, url: []const u8) void = null,
     /// The app became active (true) or stopped being active.
     on_active: ?*const fn (ctx: ?*anyopaque, active: bool) void = null,
+    /// What the About panel (the menu's `.about` role, `showAbout`) shows.
+    about: extras.About = .{},
+    /// `.accessory`: a menu bar app (a tray, `LSUIElement`), with no Dock
+    /// icon and no menu bar of its own, which can still show windows: it
+    /// does not come forward at launch, and a window it shows comes
+    /// forward with `Window.focus`. `.regular`: a Dock icon and menus,
+    /// whatever the bundle's Info.plist says.
+    activation: Activation = .regular,
 };
+
+const extras = @import("app_extras.zig");
+pub const About = extras.About;
+pub const Presentation = extras.Presentation;
+pub const Screen = @import("screens.zig").Screen;
+pub const Activation = enum { regular, accessory };
+
+/// `NSApplicationActivationPolicy`: regular (0), accessory (1), or
+/// prohibited (2) for hidden runs, which never show anything.
+pub fn activationPolicy(hidden: bool, activation: Activation) objc.NSInteger {
+    if (hidden) return 2;
+    return switch (activation) {
+        .regular => 0,
+        .accessory => 1,
+    };
+}
+
+test "activation policies: accessory apps have no Dock icon, hidden runs nothing" {
+    try std.testing.expectEqual(@as(objc.NSInteger, 0), activationPolicy(false, .regular));
+    try std.testing.expectEqual(@as(objc.NSInteger, 1), activationPolicy(false, .accessory));
+    try std.testing.expectEqual(@as(objc.NSInteger, 2), activationPolicy(true, .accessory));
+    try std.testing.expectEqual(@as(objc.NSInteger, 2), activationPolicy(true, .regular));
+}
 
 pub const App = struct {
     gpa: std.mem.Allocator,
@@ -74,13 +105,39 @@ pub const App = struct {
         func: *const fn (ctx: *anyopaque, paths: []const []const u8) void,
     };
 
+    /// iPad's New Window (`ios/scenes.zig`): the system doesn't ask for windows here.
+    pub fn onNewWindow(_: *App, _: *anyopaque, _: *const fn (ctx: *anyopaque, app: *App) void) void {}
+
     /// Takes the files the system asks the app to open.
     pub fn onOpenFiles(self: *App, ctx: *anyopaque, func: *const fn (ctx: *anyopaque, paths: []const []const u8) void) void {
         self.open_files = .{ .ctx = ctx, .func = func };
     }
 
     /// Creates the app. Call from `main`, on the main thread.
-    pub fn create(init: std.process.Init, options: Options) !*App {
+    pub fn create(init: anytype, options: Options) !*App {
+        if (@TypeOf(init) == std.process.Init.Minimal) {
+            if (@import("rt.zig").enabled) {
+                const Ext = struct {
+                    extern fn nanoui_rt_app_create_minimal(min_ptr: *const std.process.Init.Minimal, opts_ptr: *const Options, out: **App) callconv(.c) u8;
+                };
+                var out: *App = undefined;
+                if (Ext.nanoui_rt_app_create_minimal(&init, &options, &out) != 0) return error.AppInitFailed;
+                return out;
+            }
+            return @import("rt.zig").createFromMinimal(init, options);
+        }
+        if (@import("rt.zig").enabled) {
+            const Ext = struct {
+                extern fn nanoui_rt_app_create(init_ptr: *const std.process.Init, opts_ptr: *const Options, out: **App) callconv(.c) u8;
+            };
+            var out: *App = undefined;
+            if (Ext.nanoui_rt_app_create(&init, &options, &out) != 0) return error.AppInitFailed;
+            return out;
+        }
+        return createImpl(init, options);
+    }
+
+    pub fn createImpl(init: std.process.Init, options: Options) !*App {
         if (!objc.isMainThread()) return error.NotMainThread;
         const gpa = init.gpa;
         const self = try gpa.create(App);
@@ -101,6 +158,8 @@ pub const App = struct {
                 .{ .name = "application:continueUserActivity:restorationHandler:", .imp = &continueActivity, .types = "c@:@@@?" },
                 .{ .name = "applicationDidBecomeActive:", .imp = &becameActive, .types = "v@:@" },
                 .{ .name = "applicationDidResignActive:", .imp = &resignedActive, .types = "v@:@" },
+                // The menu's About (`menu.zig`'s `.about` role).
+                .{ .name = "nanouiAbout:", .imp = &aboutAction, .types = "v@:@" },
             },
         });
         const delegate = objc.msg(objc.Object, delegate_class, "new", .{});
@@ -117,19 +176,59 @@ pub const App = struct {
             .quiet = std.mem.eql(u8, init.environ_map.get("NANOUI_RESTORE") orelse "", "quiet"),
         };
         // A plain binary (not an .app bundle) still gets a Dock icon and
-        // menus; hidden runs (tests, snapshots) get neither, nor focus.
-        const policy: objc.NSInteger = if (flags.hidden) 2 else 0;
-        _ = objc.msg(objc.BOOL, nsapp, "setActivationPolicy:", .{policy});
+        // menus; an accessory app (a menu bar app) neither; hidden runs
+        // (tests, snapshots) get neither, nor focus.
+        _ = objc.msg(objc.BOOL, nsapp, "setActivationPolicy:", .{activationPolicy(flags.hidden, options.activation)});
         objc.msg(void, nsapp, "setDelegate:", .{delegate});
         try self.setMenu(&default_menu);
         return self;
     }
 
+    /// Every connected screen, the primary first (`screens.zig`).
+    pub fn screens(_: *const App, out: []Screen) []Screen {
+        return @import("screens.zig").list(out);
+    }
+
+    /// The standard About panel, with `Options.about`'s name, version and icon.
+    pub fn showAbout(self: *App) void {
+        extras.showAbout(self.nsapp, self.options.about, self.options.name);
+    }
+
+    /// Adds a file to the system's recent documents (Open Recent, the
+    /// Dock icon's menu).
+    pub fn addRecentDocument(_: *App, path: []const u8) void {
+        extras.addRecentDocument(path);
+    }
+
+    pub fn clearRecentDocuments(_: *App) void {
+        extras.clearRecentDocuments();
+    }
+
+    /// Hides the menu bar and the Dock (or lets them come back at the
+    /// screen's edge) while the app is active: a full-screen view over a
+    /// whole screen. `.{}` puts them back. Not when hidden.
+    pub fn setPresentationOptions(self: *App, p: Presentation) void {
+        if (self.flags.hidden) return;
+        objc.msg(void, self.nsapp, "setPresentationOptions:", .{p.mask()});
+    }
+
     pub fn destroy(self: *App) void {
+        if (@import("rt.zig").enabled) {
+            const Ext = struct {
+                extern fn nanoui_rt_app_destroy(app: *App) callconv(.c) void;
+            };
+            return Ext.nanoui_rt_app_destroy(self);
+        }
+        self.destroyImpl();
+    }
+
+    pub fn destroyImpl(self: *App) void {
         while (self.windows.items.len > 0) {
             const w = self.windows.items[self.windows.items.len - 1];
             w.close();
         }
+        // Surfaces closed with ticks or wakes queued, which won't run now.
+        @import("ui/surface_wake.zig").sweep();
         self.windows.deinit(self.gpa);
         self.services.deinit(self.gpa);
         self.events.deinit(self.gpa);
@@ -158,6 +257,18 @@ pub const App = struct {
     }
 
     pub fn newWindow(self: *App, options: window_mod.Options) !*Window {
+        if (@import("rt.zig").enabled) {
+            const Ext = struct {
+                extern fn nanoui_rt_app_new_window(app: *App, opts_ptr: *const window_mod.Options, out: **Window) callconv(.c) u8;
+            };
+            var out: *Window = undefined;
+            if (Ext.nanoui_rt_app_new_window(self, &options, &out) != 0) return error.WindowInitFailed;
+            return out;
+        }
+        return self.newWindowImpl(options);
+    }
+
+    pub fn newWindowImpl(self: *App, options: window_mod.Options) !*Window {
         const w = try Window.create(self, options);
         errdefer w.close();
         try self.windows.append(self.gpa, w);
@@ -177,6 +288,17 @@ pub const App = struct {
     /// Runs the event loop until the app quits. With
     /// `--nanoui-generate=<dir>` it writes the client instead and returns.
     pub fn run(self: *App) !void {
+        if (@import("rt.zig").enabled) {
+            const Ext = struct {
+                extern fn nanoui_rt_app_run(app: *App) callconv(.c) u8;
+            };
+            if (Ext.nanoui_rt_app_run(self) != 0) return error.AppRunFailed;
+            return;
+        }
+        return self.runImpl();
+    }
+
+    pub fn runImpl(self: *App) !void {
         if (self.flags.generate_dir) |dir| return self.writeClient(dir);
         if (self.flags.snapshot) |path| return dev.snapshot(self, path);
         // Quit before the loop started: nothing to run.
@@ -254,14 +376,42 @@ pub const App = struct {
         std.log.info("nanoui: wrote {s}/nanoui.js and nanoui.d.ts", .{dir_path});
     }
 
-    /// From any thread: calls `func(ctx)` on the main thread soon.
-    pub fn onMain(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
+    /// From any thread: calls `func(ctx)` on the main thread soon. True
+    /// when the call is queued; false when it never will run (on the Mac
+    /// GCD's main queue always takes it), so a caller that keeps a "wake in
+    /// flight" flag can lower it and retry.
+    pub fn onMain(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) bool {
         objc.dispatchMain(ctx, func);
+        return true;
     }
 
     /// Calls `func(ctx)` on the main thread after `ms` milliseconds.
     pub fn after(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
         objc.dispatchAfter(ms * std.time.ns_per_ms, ctx, func);
+    }
+
+    /// Main thread only: calls `func(ctx)` once the current event (and any
+    /// frame it runs) is done, in every run loop mode: also under a modal
+    /// dialog or a menu being tracked, unlike `onMain`/`after`, whose GCD
+    /// main-queue blocks all wait while one of them runs a modal. Where to
+    /// open the dialogs and context menus a view asked for.
+    pub fn soon(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
+        const Job = struct { ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void };
+        const job = std.heap.c_allocator.create(Job) catch return;
+        job.* = .{ .ctx = ctx, .func = func };
+        var tctx: cf_soon.Context = .{ .info = job };
+        const t = cf_soon.CFRunLoopTimerCreate(null, cf_soon.CFAbsoluteTimeGetCurrent(), 0, 0, 0, struct {
+            fn fire(timer: *anyopaque, info: ?*anyopaque) callconv(.c) void {
+                const j: *Job = @ptrCast(@alignCast(info));
+                const f = j.func;
+                const c = j.ctx;
+                std.heap.c_allocator.destroy(j);
+                cf_soon.CFRunLoopTimerInvalidate(timer);
+                cf_soon.CFRelease(timer);
+                f(c);
+            }
+        }.fire, &tctx);
+        cf_soon.CFRunLoopAddTimer(cf_soon.CFRunLoopGetMain(), t, cf_soon.kCFRunLoopCommonModes);
     }
 
     /// Replaces the menu bar with one built from `template`.
@@ -302,6 +452,9 @@ pub const App = struct {
 fn didFinishLaunching(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
     if (objc.getZig(App, self_obj)) |app| {
         if (app.flags.hidden) return;
+        // A menu bar app (launched at login, say) takes no focus until it
+        // shows a window with `Window.focus`.
+        if (app.options.activation == .accessory) return;
         // Opened quietly by an update's restart: launching takes no focus,
         // and windows made from now on come forward as usual.
         if (app.quiet) {
@@ -378,8 +531,24 @@ fn becameActive(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c)
     if (app.options.on_active) |f| f(app.options.ctx, true);
 }
 
+fn aboutAction(self_obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {
+    const app = objc.getZig(App, self_obj) orelse return;
+    app.showAbout();
+}
+
 fn resignedActive(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
     const app = objc.getZig(App, self_obj) orelse return;
     if (app.options.on_active) |f| f(app.options.ctx, false);
     app.wentAway();
 }
+
+const cf_soon = struct {
+    const Context = extern struct { version: isize = 0, info: ?*anyopaque, retain: ?*const anyopaque = null, release: ?*const anyopaque = null, copyDescription: ?*const anyopaque = null };
+    extern "c" fn CFRunLoopTimerCreate(a: ?*anyopaque, fire: f64, interval: f64, flags: usize, order: isize, callout: *const fn (*anyopaque, ?*anyopaque) callconv(.c) void, ctx: *Context) *anyopaque;
+    extern "c" fn CFRunLoopAddTimer(rl: *anyopaque, t: *anyopaque, mode: *anyopaque) void;
+    extern "c" fn CFRunLoopTimerInvalidate(t: *anyopaque) void;
+    extern "c" fn CFRelease(p: *anyopaque) void;
+    extern "c" fn CFRunLoopGetMain() *anyopaque;
+    extern "c" fn CFAbsoluteTimeGetCurrent() f64;
+    extern "c" const kCFRunLoopCommonModes: *anyopaque;
+};

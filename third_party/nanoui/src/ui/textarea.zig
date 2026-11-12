@@ -102,7 +102,7 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
     }, null);
     defer c.end();
     tf.rehome(c, buffer, c.node(i).id);
-    const it = c.interact(i, .{ .focusable = true });
+    const it = c.interact(i, .{ .focusable = true, .text = true });
     c.addA11y(i, .text_field, opts.placeholder, buffer.text(), it.focused, true);
     if (it.hovered) {
         c.cursor_hand = false;
@@ -115,6 +115,13 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
         n.style.border_width = 1 + focus_t;
     }
     var result: tf.Result = .{ .focused = it.focused };
+    // Asked for the keys (`TextBuffer.focus`), as a text field is.
+    if (buffer.want_focus) {
+        buffer.want_focus = false;
+        c.focus = it.id;
+        result.focused = true;
+        c.changed = true;
+    }
     const e = tf.editState(c, it.id, buffer) orelse return result;
     // Wrapped in the width it had: none yet in its first frame, so another follows.
     const w: f32 = if (it.rect) |r| @max(1, r.w - pad.horizontal()) else 1e6;
@@ -156,25 +163,35 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
                     vertical(c, buffer.text(), style, w, e, m == .move_down or m == .select_down, m == .select_up or m == .select_down);
                     continue;
                 },
+                // Tab and Shift-Tab move the focus, as in a text field
+                // (AppKit sends insertTab: here: the window's own Tab
+                // handling skips multiline fields).
+                .insert_tab => {
+                    c.focusCycle(c.input.shift);
+                    continue;
+                },
                 else => {},
             };
             tf.apply(buffer, e, op, field, c.clipboard, &result);
         }
         // Without an input method (tests, synthetic input): keys and chars.
         if (c.input.chars.len > 0) tf.apply(buffer, e, .{ .insert = c.input.chars }, field, c.clipboard, &result);
-        if (!took_undo) if (c.input.key) |k| switch (k) {
-            .backspace => tf.apply(buffer, e, .{ .command = .delete_backward }, field, c.clipboard, &result),
-            .delete => tf.apply(buffer, e, .{ .command = .delete_forward }, field, c.clipboard, &result),
-            .left => tf.apply(buffer, e, .{ .command = if (c.input.shift) .select_left else .move_left }, field, c.clipboard, &result),
-            .right => tf.apply(buffer, e, .{ .command = if (c.input.shift) .select_right else .move_right }, field, c.clipboard, &result),
-            .up, .down => vertical(c, buffer.text(), style, w, e, k == .down, c.input.shift),
-            .home => tf.apply(buffer, e, .{ .command = .move_line_start }, field, c.clipboard, &result),
-            .end => tf.apply(buffer, e, .{ .command = .move_line_end }, field, c.clipboard, &result),
-            .enter => if (newline) tf.apply(buffer, e, .{ .insert = "\n" }, field, c.clipboard, &result) else {
-                result.submitted = true;
-            },
-            .escape => c.focus = 0,
-            else => {},
+        if (!took_undo) if (c.input.key) |k| {
+            // Control (Option, as on the Mac) with ←, →, Delete and
+            // Backspace works a word at a time (`tf.commandOf`).
+            if (tf.commandOf(k, c.input.shift, c.input.ctrl or c.input.alt)) |cmd| {
+                tf.apply(buffer, e, .{ .command = cmd }, field, c.clipboard, &result);
+            } else switch (k) {
+                .up, .down => vertical(c, buffer.text(), style, w, e, k == .down, c.input.shift),
+                .home => tf.apply(buffer, e, .{ .command = .move_line_start }, field, c.clipboard, &result),
+                .end => tf.apply(buffer, e, .{ .command = .move_line_end }, field, c.clipboard, &result),
+                .enter => if (newline) tf.apply(buffer, e, .{ .insert = "\n" }, field, c.clipboard, &result) else {
+                    result.submitted = true;
+                },
+                .escape => c.focus = 0,
+                .tab => c.focusCycle(c.input.shift),
+                else => {},
+            }
         };
         textedit.commitUndo(c, buffer, e, &result, false, took_undo);
         textedit.updateCaretBlink(c, was_focused, result.changed, e.caret != prev_caret);

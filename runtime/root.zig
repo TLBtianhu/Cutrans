@@ -1,15 +1,15 @@
 //! 跨应用共享运行时入口
 
-pub const command = @import("command.zig");
+pub const command = @import("vne").command;
 pub const startup = @import("startup.zig");
 pub const config = @import("config.zig");
 pub const apps = @import("apps.zig");
 pub const surfaces = @import("surfaces.zig");
 pub const session = @import("session.zig");
-pub const status = @import("status.zig");
+pub const status = @import("vne").status;
 pub const context = @import("context.zig");
 pub const console = @import("console.zig");
-pub const documents = @import("documents.zig");
+pub const documents = @import("vne").documents;
 pub const tasks = @import("tasks.zig");
 pub const render = @import("render.zig");
 pub const paths = @import("paths.zig");
@@ -36,3 +36,4 @@ pub const library = @import("resource_library.zig");
 pub const resource_versions = @import("resource_versions.zig");
 pub const work_files = @import("work_files.zig");
 pub const work_requests = @import("work_requests.zig");
+pub const local_sources = @import("local_sources.zig");

@@ -4,7 +4,7 @@
 //! 仍保持单调,便于以后按游标消费和回放。
 
 const std = @import("std");
-const command = @import("command.zig");
+const command = @import("vne").command;
 
 pub const Id = u64;
 pub const State = enum { queued, running, succeeded, failed, cancelled, interrupted };

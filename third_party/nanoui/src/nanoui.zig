@@ -64,7 +64,7 @@ const plat = switch (builtin.os.tag) {
         pub const app = @import("windows/app.zig");
         pub const window = @import("windows/window.zig");
         pub const menu = @import("menu_accel.zig");
-        pub const tray = @import("tray_none.zig");
+        pub const tray = @import("windows/tray.zig");
         pub const dialog = @import("windows/dialog.zig");
         pub const desktop = @import("windows/desktop.zig");
         pub const fdwatch = @import("windows/fdwatch.zig");
@@ -94,7 +94,9 @@ pub const directions = @import("basics/directions.zig");
 /// Components after GPUI Kit: buttons, overlays, tabs, forms, toasts.
 pub const kit = @import("kit/kit.zig");
 pub const tsgen = @import("tsgen.zig");
-pub const Surface = if (mac) @import("ui/surface.zig").Surface else void;
+/// A native-UI window's surface: macOS's NSView, Windows' HWND client
+/// (`after_frame`, `nativeHandle`, `ctx`).
+pub const Surface = if (mac) @import("ui/surface.zig").Surface else if (builtin.os.tag == .windows) @import("windows/surface.zig").Surface else void;
 pub const a11y = if (mac) @import("ui/a11y.zig") else struct {};
 
 pub const App = plat.app.App;
@@ -102,9 +104,20 @@ pub const AppOptions = plat.app.Options;
 pub const Window = plat.window.Window;
 pub const WindowOptions = plat.window.Options;
 pub const PageOptions = plat.window.PageOptions;
+/// How high a window stacks (`WindowOptions.level`, `Window.setLevel`).
+pub const WindowLevel = @import("window_types.zig").Level;
+/// A connected screen (`App.screens`), the About panel's options
+/// (`AppOptions.about`) and what full screen hides
+/// (`App.setPresentationOptions`): macOS.
+pub const Screen = if (mac) @import("screens.zig").Screen else void;
+pub const screens = if (mac) @import("screens.zig") else struct {};
+pub const About = if (mac) @import("app_extras.zig").About else void;
+pub const Presentation = if (mac) @import("app_extras.zig").Presentation else void;
+/// A page docked in a native-UI window (`Window.dockPage`), macOS.
+pub const Page = if (mac) @import("page_webkit.zig").Page else void;
 pub const Asset = plat.window.Asset;
-/// Typed IPC for pages: wherever a webview draws them (macOS, Windows, Linux).
-const has_pages = mac or builtin.os.tag == .windows or (builtin.os.tag == .linux and !is_android);
+/// Typed IPC for pages: wherever a webview draws them (macOS, iOS, Windows, Linux).
+const has_pages = mac or builtin.os.tag == .ios or builtin.os.tag == .windows or (builtin.os.tag == .linux and !is_android);
 const page_ipc = if (has_pages) @import("ipc.zig").ipc(plat.window.Window, plat.app.App) else struct {};
 pub const Call = if (has_pages) page_ipc.Call else void;
 pub const Event = if (has_pages) page_ipc.Event else void;
@@ -138,6 +151,25 @@ pub const runFor = @import("platform.zig").runFor;
 /// nanoui's version, from build.zig.zon (set with tools/version.sh).
 pub const version = @import("build_options").version;
 
+/// Minimal process entry (`main(init: nanoui.Init)`), with `panic` and
+/// `std_options` delegated to `libnanoui-rt.a` so rebuilds after an edit
+/// skip recompiling `std.Io.Threaded` and DWARF unwinding in the app's unit.
+pub const Init = if (@import("rt.zig").desktop) std.process.Init.Minimal else std.process.Init;
+pub const std_options: std.Options = .{
+    .enable_segfault_handler = !@import("rt.zig").enabled,
+    .allow_stack_tracing = !@import("rt.zig").enabled,
+    .unexpected_error_tracing = !@import("rt.zig").enabled,
+};
+pub const std_options_debug_threaded_io: ?*std.Io.Threaded = if (@import("rt.zig").enabled) null else std.Io.Threaded.global_single_threaded;
+pub const panic = if (@import("rt.zig").enabled) std.debug.FullPanic(rtPanic) else std.debug.FullPanic(std.debug.defaultPanic);
+
+fn rtPanic(msg: []const u8, first_trace_addr: ?usize) noreturn {
+    const Ext = struct {
+        extern fn nanoui_rt_panic(ptr: [*]const u8, len: usize, addr: usize, has_addr: u8) callconv(.c) noreturn;
+    };
+    Ext.nanoui_rt_panic(msg.ptr, msg.len, first_trace_addr orelse 0, if (first_trace_addr != null) 1 else 0);
+}
+
 test {
     _ = tsgen;
     _ = ui;
@@ -148,6 +180,8 @@ test {
     _ = @import("menu_types.zig");
     _ = @import("update.zig");
     _ = @import("update_auto.zig");
+    // Pure, and tested on every platform: the rest of src/ios only compiles for iOS.
+    _ = @import("ios/key_repeat.zig");
     _ = @import("basics/kv_file.zig");
     _ = @import("http.zig");
     _ = haptics;
@@ -157,6 +191,8 @@ test {
     _ = kv;
     // The updater is for desktop apps; iOS updates through the App Store.
     if (builtin.os.tag != .ios) _ = @import("update_portable.zig");
+    // The Windows tray's menu model and callback decoding, platform-free.
+    if (builtin.os.tag != .ios) _ = @import("windows/tray_model.zig");
     if (is_android) {
         inline for (.{ plat.app, plat.window, plat.dialog, plat.desktop, plat.fdwatch, @import("android/surface.zig"), @import("android/keys.zig"), @import("android/touch.zig"), @import("android/activity.zig"), @import("android/bars.zig"), @import("android/egl.zig"), @import("android/jni.zig") }) |m| std.testing.refAllDecls(m);
         inline for (.{ plat.app.App, plat.window.Window, plat.desktop.clipboard, plat.desktop.shell, @import("android/surface.zig").Surface }) |T| std.testing.refAllDecls(T);
@@ -181,6 +217,18 @@ test {
             _ = @import("windows/tests_surface.zig");
             // The window's own: styles, sizes, the close veto, the timers.
             _ = @import("windows/tests_window.zig");
+            // Frames on the display's beat, gathered input, the frame log.
+            _ = @import("windows/tests_pace.zig");
+            // A title bar the app draws, frames kept between launches,
+            // the icon, cursors and launch URLs.
+            _ = @import("windows/chrome.zig");
+            _ = @import("windows/window_place.zig");
+            _ = @import("windows/tests_chrome.zig");
+            _ = @import("windows/cursor.zig");
+            _ = @import("windows/app.zig");
+            // The notification area's icon: the shell calls and the popup.
+            std.testing.refAllDecls(@import("windows/tray.zig").Tray);
+            std.testing.refAllDecls(@import("windows/app.zig").App);
             // File drops: path/URL conversion and one HDROP as one event.
             _ = @import("windows/drop_files.zig");
             _ = @import("windows/tests_drop_files.zig");
@@ -188,6 +236,8 @@ test {
             // decode/mapping units.
             _ = @import("windows/ime.zig");
             _ = @import("windows/tests_ime.zig");
+            // The open dialog, made and asked what it is, never shown.
+            _ = @import("windows/tests_dialog.zig");
         }
         // The GTK window's: decorations, the taskbar hint, opacity.
         if (builtin.os.tag == .linux) _ = @import("linux/tests_window.zig");
@@ -208,4 +258,9 @@ test {
     std.testing.refAllDecls(@import("tray.zig").Tray);
     // The window's own: borderless, out of the window cycle, its alpha.
     _ = @import("tests_window.zig");
+    // Screens, the About panel's options, recent documents.
+    _ = @import("screens.zig");
+    _ = @import("app_extras.zig");
+    // Windows opened while running and closed by the app, keys.
+    _ = @import("tests_window_more.zig");
 }

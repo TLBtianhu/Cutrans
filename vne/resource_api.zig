@@ -1,7 +1,7 @@
 //! Versioned resource-catalog requests, independent of document edit stamps.
 const std = @import("std");
 
-pub const version: u32 = 3;
+pub const version: u32 = 4;
 pub const max_path_size: usize = 64 * 1024;
 pub const max_work_body_size: usize = 16 * 1024 * 1024;
 pub const max_work_label_size: usize = 128;
@@ -156,6 +156,10 @@ pub const Api = extern struct {
     /// Successful work receipts persist with the Catalog commit. Replaying the
     /// identical request consults that receipt before current revision checks.
     work_submit: *const fn (?*anyopaque, ?*const WorkRequest, ?*WorkOutcome) callconv(.c) i32 = undefined,
+    /// One-level read-only directory observation; no Resource or grant is created.
+    source_browse: *const fn (?*anyopaque, Bytes, u64, u32, ?[*]u8, usize, ?*usize) callconv(.c) i32 = undefined,
+    /// Read one explicit ordinary file through the current source boundary.
+    source_read: *const fn (?*anyopaque, Bytes, ?[*]u8, usize, ?*usize) callconv(.c) i32 = undefined,
 
     pub fn isCurrent(self: *const Api) bool {
         return self.struct_size == @sizeOf(Api) and self.api_version == version and self.context != null;

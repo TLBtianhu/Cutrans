@@ -2,12 +2,6 @@
   #error Build with the generated ProductConfigFile through zig build installer
 #endif
 #include ProductConfigFile
-#ifndef InstalledContextFile
-  #error InstalledContextFile is required
-#endif
-#ifndef InstalledVMManifestFile
-  #error InstalledVMManifestFile is required
-#endif
 #ifndef PortableRoot
   #error PortableRoot is required
 #endif
@@ -32,7 +26,7 @@ OutputBaseFilename={#ProductName}-Setup-{#ProductVersion}-windows-x64
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-UninstallDisplayIcon={app}\app\cutrans_vm.exe
+UninstallDisplayIcon={app}\app\cutrans.exe
 ChangesAssociations=yes
 CloseApplications=no
 RestartApplications=no
@@ -42,15 +36,15 @@ SetupMutex={#ProductId}.setup
 Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
 [Files]
-Source: "{#PortableRoot}\runtime\*"; DestDir: "{app}\runtime-envs\default"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#PortableRoot}\shell\*"; DestDir: "{app}\shells\desktop"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#PortableRoot}\nanoui-library\*"; DestDir: "{app}\shells\nanoui-library"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#PortableRoot}\*"; DestDir: "{app}\app"; Excludes: "runtime\*,shell\*,nanoui-library\*,data\*,cutrans-context.json,vm-pack.json"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#InstalledContextFile}"; DestDir: "{app}\app"; DestName: "cutrans-context.json"; Flags: ignoreversion
-Source: "{#InstalledVMManifestFile}"; DestDir: "{app}\app"; DestName: "vm-pack.json"; Flags: ignoreversion
+; The unified cutrans.exe carries the portable payload and both run contexts.
+; Installed launches select the embedded installed context; no external
+; cutrans-context.json is copied.
+Source: "{#PortableRoot}\cutrans.exe"; DestDir: "{app}\app"; Flags: ignoreversion
+Source: "{#PortableRoot}\licenses\*"; DestDir: "{app}\app\licenses"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#PortableRoot}\README.md"; DestDir: "{app}\app"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
-Name: "{autoprograms}\{#ProductName}"; Filename: "{app}\app\cutrans_vm.exe"; Parameters: "desktop --mode=installed"; WorkingDir: "{app}\app"; Flags: uninsneveruninstall
+Name: "{autoprograms}\{#ProductName}"; Filename: "{app}\app\cutrans.exe"; Parameters: "desktop --mode=installed"; WorkingDir: "{app}\app"; Flags: uninsneveruninstall
 
 [InstallDelete]
 Type: files; Name: "{autoprograms}\Cutrans 资源库 (NanoUI).lnk"; Check: ShouldDeleteLegacyShortcut
@@ -58,7 +52,7 @@ Type: files; Name: "{autoprograms}\Cutrans 资源库 (NanoUI).lnk"; Check: Shoul
 [Registry]
 Root: HKA; Subkey: "Software\Classes\{#ProductExtension}"; ValueType: string; ValueName: ""; ValueData: "{#ProductProgId}"; Check: ShouldAssociateCut
 Root: HKA; Subkey: "Software\Classes\{#ProductProgId}"; ValueType: string; ValueName: ""; ValueData: "{#ProductName} Document"
-Root: HKA; Subkey: "Software\Classes\{#ProductProgId}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\app\cutrans_vm.exe"" desktop --mode=installed --open ""%1"""
+Root: HKA; Subkey: "Software\Classes\{#ProductProgId}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\app\cutrans.exe"" desktop --mode=installed --open ""%1"""
 
 [Code]
 const
@@ -111,7 +105,7 @@ end;
 
 function ExpectedOpenCommand(const Root: String): String;
 begin
-  Result := '"' + NormalPath(Root) + '\app\cutrans_vm.exe" desktop --mode=installed --open "%1"';
+  Result := '"' + NormalPath(Root) + '\app\cutrans.exe" desktop --mode=installed --open "%1"';
 end;
 
 function OwnsRegistration(const Root: String): Boolean;
@@ -142,7 +136,7 @@ begin
   try
     Shell := CreateOleObject('WScript.Shell');
     Link := Shell.CreateShortcut(Path);
-    Result := SameText(NormalPath(Link.TargetPath), NormalPath(Root) + '\app\cutrans_vm.exe');
+    Result := SameText(NormalPath(Link.TargetPath), NormalPath(Root) + '\app\cutrans.exe');
   except
     Log('Shortcut ownership is unavailable; preserving the link');
   end;
@@ -271,6 +265,12 @@ begin
   Result := CandidateCount = ExistingCount;
 end;
 
+function IsLegacyLayout(const Root: String): Boolean;
+begin
+  Result := DirExists(Root + '\runtime-envs') or DirExists(Root + '\shells') or
+    DirExists(Root + '\payload') or FileExists(Root + '\app\cutrans_vm.exe');
+end;
+
 function StopOwnedHost: Boolean;
 var
   Root, Exe: String;
@@ -279,7 +279,7 @@ begin
   Result := false;
   Root := ExpandConstant('{app}');
   if not SafeParents(Root) or not SafeParents(Root + '\data') or not OwnsRegistration(Root) then exit;
-  Exe := Root + '\app\cutrans_vm.exe';
+  Exe := Root + '\app\cutrans.exe';
   if not FileExists(Exe) or not SafeParents(Exe) or not SafeParents(Root + '\data\session') or not SafeParents(Root + '\data\documents') then exit;
   if not Exec(Exe, 'stop --mode=installed --data="' + Root + '\data"',
     Root + '\app', SW_HIDE, ewWaitUntilTerminated, Code) then exit;
@@ -292,17 +292,10 @@ var
 begin
   DiagnosticSerial := DiagnosticSerial + 1;
   VerifyDataDir := ExpandConstant('{tmp}') + '\{#ProductId}-diagnostic-' + Phase + '-' + IntToStr(DiagnosticSerial);
-  Parameters := '--mode=installed "--verify-data-dir=' + VerifyDataDir + '"';
-  if not ExecAsOriginalUser(Root + '\cutrans_diag.exe', Parameters, Root,
+  Parameters := '--diag --mode=installed "--data=' + VerifyDataDir + '"';
+  if not ExecAsOriginalUser(Root + '\cutrans.exe', Parameters, Root,
     SW_HIDE, ewWaitUntilTerminated, Result) then Result := -1;
-  Log('CUTRANS_INSTALL_DIAGNOSTIC phase=' + Phase + ' isolated=1 code=' + IntToStr(Result));
-  if Result = 0 then
-  begin
-    Parameters := '--diag --mode=installed "--data=' + VerifyDataDir + '"';
-    if not ExecAsOriginalUser(Root + '\cutrans_bootstrap.exe', Parameters, Root,
-      SW_HIDE, ewWaitUntilTerminated, Result) then Result := -1;
-    Log('CUTRANS_INSTALL_RUNTIME_DIAGNOSTIC phase=' + Phase + ' isolated=1 code=' + IntToStr(Result));
-  end;
+  Log('CUTRANS_INSTALL_DIAGNOSTIC phase=' + Phase + ' isolated=1 unified=1 code=' + IntToStr(Result));
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -348,6 +341,12 @@ begin
         exit;
       end;
       FailureStage := 'upgrade-guard';
+      if IsLegacyLayout(Root) then
+      begin
+        Log('CUTRANS_UPGRADE_LEGACY_LAYOUT rejected=1 migration=manual');
+        Result := '检测到旧版多目录布局（runtime-envs/shells/payload 或 cutrans_vm.exe）。本安装器不自动迁移旧程序资产；请先备份用户数据并卸载旧版，或使用旧版安装器完成迁移。';
+        exit;
+      end;
       if not SameProgramTree(Candidate + '\app', Root + '\app') or
          not SameProgramTree(Candidate + '\runtime-envs', Root + '\runtime-envs') or
          not SameProgramTree(Candidate + '\shells', Root + '\shells') then
@@ -405,7 +404,7 @@ begin
     if (not DiagnosticFailed) and FileExists(Root + '\data\session\runtime.lock') then
     begin
       FailureStage := 'runtime-activation';
-      if not Exec(Root + '\app\cutrans_vm.exe', 'activate-runtime --mode=installed "--runtime=' +
+      if not Exec(Root + '\app\cutrans.exe', 'activate-runtime --mode=installed "--runtime=' +
         Root + '\runtime-envs\default" "--data=' + Root + '\data"', Root + '\app',
         SW_HIDE, ewWaitUntilTerminated, Code) then DiagnosticFailed := true
       else DiagnosticFailed := Code <> 0;

@@ -9,6 +9,9 @@ const types = @import("types.zig");
 const utf8 = @import("utf8.zig");
 const ctx_mod = @import("context.zig");
 const lines_mod = @import("textfield_lines.zig");
+const keys = @import("textfield_keys.zig");
+/// The command a key with its modifiers means (`textfield_keys.zig`).
+pub const commandOf = keys.commandOf;
 pub const Caret = lines_mod.Caret;
 const Context = ctx_mod.Context;
 const EditState = ctx_mod.EditState;
@@ -76,14 +79,14 @@ pub const TextBuffer = struct {
     }
 };
 
-fn prevBoundary(s: []const u8, i: usize) usize {
+pub fn prevBoundary(s: []const u8, i: usize) usize {
     if (i == 0) return 0;
     var j = i - 1;
     while (j > 0 and (s[j] & 0xc0) == 0x80) j -= 1;
     return j;
 }
 
-fn nextBoundary(s: []const u8, i: usize) usize {
+pub fn nextBoundary(s: []const u8, i: usize) usize {
     if (i >= s.len) return s.len;
     return @min(s.len, i + utf8.seqLen(s[i]));
 }
@@ -96,6 +99,8 @@ pub const Options = struct {
     placeholder: []const u8 = "",
     width: types.Length = .{ .px = 240 },
     size: f32 = 14,
+    weight: types.Weight = .regular,
+    mono: bool = false,
     /// Shows bullets instead of the text, and keeps it off the clipboard.
     password: bool = false,
     /// Text that would follow what is typed, drawn faintly after it, as a
@@ -124,7 +129,28 @@ pub const Options = struct {
     line_height: f32 = 0,
     /// The placeholder's color; the theme's muted text if null.
     placeholder_color: ?types.Color = null,
+    /// What typed, pasted or composed-and-committed text keeps: each code
+    /// point mapped (a full-width digit to ASCII) or dropped (null), before
+    /// it reaches the text or the undo history. A key it drops entirely
+    /// leaves the selection alone; a dropped composition is still taken
+    /// out. A timecode field's digits, a number field's.
+    filter: ?*const fn (cp: u21) ?u21 = null,
 };
+
+/// `t` through `filter`, into `out` (truncated to it).
+fn filtered(filter: *const fn (u21) ?u21, t: []const u8, out: []u8) []const u8 {
+    var n: usize = 0;
+    var it = (std.unicode.Utf8View.init(t) catch return "").iterator();
+    while (it.nextCodepoint()) |cp| {
+        const kept = filter(cp) orelse continue;
+        var enc: [4]u8 = undefined;
+        const len = std.unicode.utf8Encode(kept, &enc) catch continue;
+        if (n + len > out.len) break;
+        @memcpy(out[n .. n + len], enc[0..len]);
+        n += len;
+    }
+    return out[0..n];
+}
 
 pub const Result = struct {
     changed: bool = false,
@@ -168,7 +194,10 @@ pub fn apply(buffer: *TextBuffer, e: *EditState, op: ctx_mod.TextOp, opts: Optio
     const line_start = if (opts.multiline) keymap.lineStart(s, e.caret) else 0;
     const line_end = if (opts.multiline) keymap.lineEnd(s, e.caret) else s.len;
     switch (op) {
-        .insert => |t| {
+        .insert => |t_in| {
+            var fbuf: [1024]u8 = undefined;
+            const t = if (opts.filter) |f| filtered(f, t_in, &fbuf) else t_in;
+            if (t.len == 0 and t_in.len > 0 and e.marked == null) return;
             const range = e.marked orelse .{ lo, hi };
             const n = buffer.replace(range[0], range[1], t);
             e.caret = range[0] + n;
@@ -280,7 +309,7 @@ const bullets = "•••••••••••••••••••••
 
 pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     const th = c.theme;
-    const style: types.TextStyle = .{ .size = opts.size, .line_height = opts.line_height };
+    const style: types.TextStyle = .{ .size = opts.size, .weight = opts.weight, .line_height = opts.line_height, .mono = opts.mono };
     const pad_x: f32 = if (opts.bare) 0 else 10;
     const pad_y: f32 = if (opts.bare) 2 else 7;
     const multi = opts.multiline and !opts.password;
@@ -288,7 +317,9 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
         .direction = if (multi) .column else .row,
         .width = opts.width,
         .padding = .xy(pad_x, pad_y),
-        .radius = 8,
+        // A bare field sits in its app's frame: with no box of its own, a
+        // rounded clip would only cut the caret at its first and last line.
+        .radius = if (opts.bare) 0 else 8,
         .background = if (opts.bare) null else th.surface,
         .border = if (opts.bare) null else th.border,
         .align_items = if (multi) .start else .center,
@@ -296,7 +327,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     }, null);
     defer c.end();
     rehome(c, buffer, c.node(i).id);
-    var it = c.interact(i, .{ .focusable = true });
+    var it = c.interact(i, .{ .focusable = true, .text = true });
     c.addA11y(i, .text_field, opts.placeholder, buffer.text(), it.focused, true);
     if (buffer.want_focus) {
         buffer.want_focus = false;
@@ -308,20 +339,19 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
         c.cursor_hand = false;
         c.cursor_text = true;
     }
-    const focus_t = c.animate(it.id, 0, if (it.focused) 1 else 0, 20);
     const n = c.node(i);
+    n.layout_dependent = multi and buffer.text().len > 0;
     if (!opts.bare) {
+        const focus_t = c.animate(it.id, 0, if (it.focused) 1 else 0, 20);
         n.style.border = th.border.mix(th.accent, focus_t);
         n.style.border_width = 1 + focus_t;
         if (focus_t > 0.01) n.style.shadow = .{ .color = th.accent.alpha(0.25 * focus_t), .blur = 6, .y = 0 };
     }
-
     var result: Result = .{ .focused = it.focused };
+    const requested = buffer.want_caret != null or buffer.want_selection != null;
     const e = editState(c, it.id, buffer) orelse return result;
-    // A multiline field wraps at last frame's width (unknown at first).
     const wrap_w: f32 = if (it.rect) |r| @max(1, r.w - 2 * pad_x) else 1e6;
     const lh_ = c.text.lineHeight(style);
-    // Where the wheel scrolled a multiline field; the caret before edits.
     if (multi) if (c.scroll.get(it.id)) |v| {
         e.scroll_y = v;
     };
@@ -335,12 +365,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
             return buf[0..@min(count * 3, buf.len)];
         }
     }.f;
-    const shownIndex = struct {
-        fn f(s: []const u8, password: bool, i_: usize) usize {
-            if (!password) return i_;
-            return (std.unicode.utf8CountCodepoints(s[0..i_]) catch i_) * 3;
-        }
-    }.f;
+    const shownIndex = lines_mod.shownIndex;
 
     if (it.right_clicked) c.text_menu = true;
     if (it.focused) {
@@ -364,11 +389,11 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
                 }
             } else if (c.input.pressed and c.input.button == .left and !c.input.ctrl and it.hovered) {
                 const idx = c.text.indexAt(shownOf(buffer.text(), opts.password, bullets), style, local_x);
-                const at = if (opts.password) byteOfCodepoint(buffer.text(), idx / 3) else idx;
+                const at = if (opts.password) lines_mod.byteOfCodepoint(buffer.text(), idx / 3) else idx;
                 textedit.pointerSelect(c, e, buffer.text(), at, false);
             } else if (e.selecting and c.input.down) {
                 const idx = c.text.indexAt(shownOf(buffer.text(), opts.password, bullets), style, local_x);
-                const at = if (opts.password) byteOfCodepoint(buffer.text(), idx / 3) else idx;
+                const at = if (opts.password) lines_mod.byteOfCodepoint(buffer.text(), idx / 3) else idx;
                 textedit.pointerDrag(c, e, buffer.text(), at, false);
             }
             if (!c.input.down) e.selecting = false;
@@ -404,28 +429,19 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
             if (op == .command and (op.command == .copy or op.command == .cut) and e.caret != e.anchor) c.copy_done = true;
             apply(buffer, e, op, opts, c.clipboard, &result);
         }
-        // Without an input method (tests, synthetic input): keys and chars.
-        if (c.input.chars.len > 0 and !took.text) apply(buffer, e, .{ .insert = c.input.chars }, opts, c.clipboard, &result);
-        if (!took.key) if (c.input.key) |k| switch (k) {
-            .backspace => apply(buffer, e, .{ .command = .delete_backward }, opts, c.clipboard, &result),
-            .delete => apply(buffer, e, .{ .command = .delete_forward }, opts, c.clipboard, &result),
-            .left => apply(buffer, e, .{ .command = if (c.input.shift) .select_left else .move_left }, opts, c.clipboard, &result),
-            .right => apply(buffer, e, .{ .command = if (c.input.shift) .select_right else .move_right }, opts, c.clipboard, &result),
-            .up, .down => if (multi) {
-                e.caret = lines_mod.vertical(c, buffer.text(), style, lines_mod.layout(c, buffer.text(), style, wrap_w), e.caret, if (k == .up) -1 else 1);
-                if (!c.input.shift) e.anchor = e.caret;
-            } else apply(buffer, e, .{ .command = if (k == .up) .move_line_start else .move_line_end }, opts, c.clipboard, &result),
-            .home => apply(buffer, e, .{ .command = .move_line_start }, opts, c.clipboard, &result),
-            .end => apply(buffer, e, .{ .command = .move_line_end }, opts, c.clipboard, &result),
-            .tab => c.focusCycle(c.input.shift),
-            .enter => if (multi and (c.input.shift or c.input.alt)) {
-                apply(buffer, e, .{ .command = .insert_line_break }, opts, c.clipboard, &result);
-            } else {
-                result.submitted = true;
-            },
-            .escape => c.focus = 0,
-            else => {},
-        };
+        // Without an input method (tests, synthetic input): keys and chars,
+        // a word at a time with Control (`textfield_keys.zig`).
+        keys.handle(c, .{
+            .buffer = buffer,
+            .edit = e,
+            .opts = opts,
+            .result = &result,
+            .multi = multi,
+            .style = style,
+            .wrap_w = wrap_w,
+            .text_taken = took.text,
+            .key_taken = took.key,
+        });
         textedit.commitUndo(c, buffer, e, &result, took.text, took.key);
         textedit.updateCaretBlink(c, was_focused, result.changed, e.caret != prev_caret);
         if (result.changed or result.submitted) c.changed = true;
@@ -445,8 +461,9 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     result.caret = e.caret;
     result.vim_normal = opts.keys == .vim and e.keys.vim_normal;
     result.vim_visual = result.vim_normal and e.keys.vim_visual;
-    // A copy for the frame: the app may set the buffer (moving it) before
-    // the frame is painted, or the input method asks about it.
+    const edited = requested or result.changed or e.caret != caret_before[0] or e.anchor != caret_before[1] or c.input.pressed;
+    const caret_shown = textedit.caretShown(c, e, focused, edited, result.vim_normal);
+    // Copy before the app can move the buffer or the input method asks.
     const s = c.alloc().dupe(u8, buffer.text()) catch buffer.text();
     if (multi) {
         const lines = lines_mod.layout(c, s, style, wrap_w);
@@ -456,7 +473,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
         // Past its most lines it scrolls: the wheel's, and a scrollbar.
         c.node(i).style.scroll = lines.len > opts.max_lines;
         const follow = result.changed or e.caret != caret_before[0] or e.anchor != caret_before[1] or s.len != caret_before[2];
-        const d = lines_mod.draw(c, s, e, style, lines, view_h, focused, follow, result.vim_normal, opts.placeholder, opts.placeholder_color orelse th.muted, opts.suggestion, opts.caret, opts.caret_color orelse th.accent);
+        const d = lines_mod.draw(c, s, e, style, lines, view_h, focused, follow, result.vim_normal, caret_shown, opts.placeholder, opts.placeholder_color orelse th.muted, opts.suggestion, opts.caret, opts.caret_color orelse th.accent);
         c.scroll.put(c.gpa, it.id, e.scroll_y) catch {};
         result.line = d.line;
         result.lines = d.lines;
@@ -470,6 +487,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
                 .anchor = e.anchor,
                 .marked = e.marked,
                 .caret_rect = .{ .x = r.x + pad_x + d.caret.x, .y = r.y + pad_y + d.caret.y, .w = opts.caret.width, .h = lh_ },
+                .ends = if (e.caret != e.anchor) lines_mod.ends(c, s, style, lines, @min(e.caret, e.anchor), @max(e.caret, e.anchor), r.x + pad_x, r.y + pad_y - e.scroll_y, lh_) else null,
             };
         }
         return result;
@@ -504,7 +522,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
         const x1 = c.text.caretX(shown, style, shownIndex(s, opts.password, m[1]));
         _ = c.leaf(.{ .absolute = true, .width = .{ .px = x1 - x0 }, .height = .{ .px = 1.5 }, .background = opts.color orelse th.text, .offset = .{ .x = x0 - e.scroll_x, .y = lh - 1 } }, .none, null);
     };
-    if (focused and hi == lo and (result.vim_normal or textedit.caretVisible(c))) {
+    if (caret_shown) {
         // Vim's normal mode: a block over the character under the caret.
         const block = result.vim_normal;
         const w: f32 = if (!block) opts.caret.width else if (e.caret < s.len) @max(4, c.text.caretX(shown, style, shownIndex(s, opts.password, @min(s.len, e.caret + 1))) - caret_x) else c.text.width("m", style);
@@ -515,6 +533,13 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
         c.focused_password = opts.password;
         c.focused_multiline = false;
         const r = it.rect orelse types.Rect{};
+        // The clause the input method converts: the selection inside the
+        // composition, else the composition's start.
+        const clause: ?types.Rect = if (e.marked) |m| blk: {
+            const at = std.math.clamp(@min(e.caret, e.anchor), m[0], m[1]);
+            const x = c.text.caretX(shown, style, shownIndex(s, opts.password, if (e.caret == e.anchor) m[0] else at));
+            break :blk .{ .x = r.x + pad_x + x - e.scroll_x, .y = r.y + (r.h - lh) / 2, .w = opts.caret.width, .h = lh };
+        } else null;
         c.focused_text = .{
             .id = it.id,
             .text = s,
@@ -522,79 +547,16 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
             .anchor = e.anchor,
             .marked = e.marked,
             .caret_rect = .{ .x = r.x + pad_x + caret_x - e.scroll_x, .y = r.y + (r.h - lh) / 2, .w = opts.caret.width, .h = lh },
+            .clause_rect = clause,
+            .ends = if (hi > lo) .{
+                .{ .x = r.x + pad_x - e.scroll_x + c.text.caretX(shown, style, shownIndex(s, opts.password, lo)), .y = r.y + (r.h - lh) / 2, .w = 0, .h = lh },
+                .{ .x = r.x + pad_x - e.scroll_x + c.text.caretX(shown, style, shownIndex(s, opts.password, hi)), .y = r.y + (r.h - lh) / 2, .w = 0, .h = lh },
+            } else null,
         };
     }
     return result;
 }
 
-fn byteOfCodepoint(s: []const u8, n: usize) usize {
-    var i: usize = 0;
-    var k: usize = 0;
-    while (i < s.len and k < n) : (k += 1) i += utf8.seqLen(s[i]);
-    return @min(i, s.len);
-}
-
 pub const rehome = textedit.rehome;
 pub const editState = textedit.editState;
 pub const focusSelect = textedit.focusSelect;
-
-test "buffer edits" {
-    var b: TextBuffer = .{};
-    defer b.deinit();
-    b.set("hllo");
-    _ = b.insert(1, "e");
-    try std.testing.expectEqualStrings("hello", b.text());
-    b.remove(0, 1);
-    try std.testing.expectEqualStrings("ello", b.text());
-    _ = b.replace(1, 3, "XYZ");
-    try std.testing.expectEqualStrings("eXYZo", b.text());
-    b.set("añb");
-    try std.testing.expectEqual(@as(usize, 1), prevBoundary(b.text(), 3));
-    try std.testing.expectEqual(@as(usize, 3), nextBoundary(b.text(), 1));
-    try std.testing.expectEqual(@as(usize, 0), prevWord("foo bar", 3));
-    try std.testing.expectEqual(@as(usize, 7), nextWord("foo bar", 3));
-}
-
-fn noClip(_: ?*anyopaque, _: []const u8) void {}
-
-test "composition, selection, commands" {
-    var b: TextBuffer = .{};
-    defer b.deinit();
-    var e: EditState = .{};
-    var r: Result = .{};
-    apply(&b, &e, .{ .insert = "hello world" }, .{}, .{ .write = noClip }, &r);
-    apply(&b, &e, .{ .command = .select_word_left }, .{}, .{ .write = noClip }, &r);
-    try std.testing.expectEqual(@as(usize, 6), @min(e.caret, e.anchor));
-    apply(&b, &e, .{ .insert = "Zig" }, .{}, .{ .write = noClip }, &r);
-    try std.testing.expectEqualStrings("hello Zig", b.text());
-    // An input method composes "日本", then commits it.
-    apply(&b, &e, .{ .set_marked = .{ .text = "に", .sel_start = 3, .sel_len = 0 } }, .{}, .{ .write = noClip }, &r);
-    try std.testing.expect(e.marked != null);
-    apply(&b, &e, .{ .set_marked = .{ .text = "日本", .sel_start = 6, .sel_len = 0 } }, .{}, .{ .write = noClip }, &r);
-    apply(&b, &e, .{ .insert = "日本" }, .{}, .{ .write = noClip }, &r);
-    try std.testing.expectEqualStrings("hello Zig日本", b.text());
-    try std.testing.expect(e.marked == null);
-    apply(&b, &e, .{ .command = .delete_word_backward }, .{}, .{ .write = noClip }, &r);
-    try std.testing.expectEqualStrings("hello ", b.text());
-    apply(&b, &e, .{ .command = .select_all }, .{}, .{ .write = noClip }, &r);
-    apply(&b, &e, .{ .command = .delete_backward }, .{}, .{ .write = noClip }, &r);
-    try std.testing.expectEqualStrings("", b.text());
-}
-
-test "a suggestion is taken with → at the end" {
-    var b: TextBuffer = .{};
-    defer b.deinit();
-    var e: EditState = .{};
-    var r: Result = .{};
-    const opts: Options = .{ .suggestion = "status" };
-    apply(&b, &e, .{ .insert = "git " }, opts, .{ .write = noClip }, &r);
-    apply(&b, &e, .{ .command = .move_left }, opts, .{ .write = noClip }, &r);
-    // Not at the end: → only moves.
-    apply(&b, &e, .{ .command = .move_right }, opts, .{ .write = noClip }, &r);
-    try std.testing.expect(!r.accepted);
-    try std.testing.expectEqualStrings("git ", b.text());
-    apply(&b, &e, .{ .command = .move_right }, opts, .{ .write = noClip }, &r);
-    try std.testing.expect(r.accepted);
-    try std.testing.expectEqualStrings("git status", b.text());
-    try std.testing.expectEqual(@as(usize, 10), e.caret);
-}

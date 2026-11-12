@@ -2,7 +2,7 @@ const std = @import("std");
 const RuntimeContext = @import("context.zig").Context;
 const stream_mod = @import("stream.zig");
 const escapement = @import("escapement.zig");
-const command = @import("command.zig");
+const command = @import("vne").command;
 
 pub const Playback = struct {
     stream: stream_mod.Stream = undefined,

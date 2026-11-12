@@ -14,7 +14,7 @@ Cutrans 的核心不是复制一个传统剪辑器，而是建立一个**声明�
 2. **声明唯一真源，一切皆投影**：文档、任务和视图状态不依赖某个界面；`.cut` 是可读、可 diff、可恢复的文本声明。
 3. **机制与策略分家**：协议定义“做什么”，插件和 OS Port 决定“如何执行”。
 
-当前实例化RuntimeContext，支持Surface的full／dock／floating、焦点与命中、系统任务栏和CCB启动清单。主桌面已统一为NanoUI页面投影，旧CUI已移除；桌面、CLI、编辑器和资源管理器按App分责，不要求每个App独立进程。
+当前实例化RuntimeContext，支持Surface的full／dock／floating、焦点与命中、系统任务栏和CCB启动清单。主桌面已统一为NanoUI页面投影，旧CUI已移除；桌面、CLI、编辑器和资源管理器按App分责，不要求每个App独立进程。命令注册表和帧边界队列是`vne.command`，Runtime与Shell共享；Runtime继续通过`runtime.command`兼容导出。预览帧经ABI11的`preview_info`/`preview_read`由VM产出，Shell只接收BGRA8帧并回执，不再在本地跑文档预览DAG。桌面Shell改用`vm_client.Context`，只持有命令、文档镜像、资源/库/播放/设备视图与路径，不再实例化`RuntimeContext`；PNG编解码在共享`imaging`模块，`vm_client`不再直接导入Runtime。
 
 `.cut v3`描述图像DAG，支持resolution、fps、testsrc、gain、invert、over、image、resize与显式output。规范身份`Birth{inspire,transform,aggregate}`和聚合参数`AggIn{x,y,opacity,t}`进入规范化文本；指纹使用固定宽度、小端整数及明确浮点位模式。v1／v2仍可读并迁移。
 
@@ -56,20 +56,20 @@ owned及已采用版本保存在`library/versions/<id>/<sha>.bin`，旧`library/
 
 `bootstrap/activation.zig` 统一无头诊断、回放、NanoUI 桌面入口和独立 Host 的 Runtime 激活顺序：完整性与选择锁检查 → 从当前根解析 Pack → 真实创建与 ABI/能力握手 → 文档恢复、回放或保存/恢复诊断 → 再次校验完整性 → 原子提交选择。缺文件、ABI 不符、创建失败或握手失败都不会改写原有锁。选择锁不含宿主绝对路径，`verify-runtime` 包含完整人工安装布局移动后的资源重定位用例；这不等于迁移 Windows 登记，真实安装根移动仍需处理快捷方式和关联。`activate-runtime` 只在 Host 已停止后校验候选并提交 Runtime 锁，不能证明程序文件复制和登记具备升级事务。
 
-`zig-out/vm-shell/` 包含 `cutrans_shell.exe` 和桌面资源；`shell-pack.json` 使用 `cutrans-shell-pack/1`，审计实际载荷文件。默认 `--open` 会完成 `Bootstrap → VM → Shell → doc.open → editor`，GUI 文档命令全部转发给 VM，界面只接收经过指纹校验的文档镜像。主桌面统一使用 NanoUI，包含首页、编辑器、资源库、CLI 和任务视图；`cutrans_vm.exe` 是 Bootstrap 薄入口，也提供新的 Host 控制命令。
+`zig-out/vm-shell/` 包含 `cutrans_shell.exe` 和桌面资源；`shell-pack.json` 使用 `cutrans-shell-pack/1`，审计实际载荷文件。默认 `--open` 会完成 `Bootstrap → VM → Shell → doc.open → editor`，GUI 文档命令全部转发给 VM，界面只接收经过指纹校验的文档镜像。主桌面统一使用 NanoUI，包含首页、编辑器、资源库、CLI 和任务视图；`cutrans.exe` 是统一控制器并携带 NanoUI 入口，`cutrans_vm.exe` 继续作为旧 Bootstrap 薄入口及回退路径，两者都提供 Host 控制命令。
 
 ## Host生命周期
 
 公开控制命令见[命令参考](../reference/commands.md)。
 
-`cutrans_vm_host.exe` 在独立进程中加载同一 Runtime Pack、完成能力握手并持有 Runtime。控制台只通过本机消息管道读取真实状态，不以 PID 冒充就绪；Detached 进程不会在控制台退出时被关闭。不同数据根使用不同管道和 `session/host.lock` 单实例锁，Host 运行时无头诊断和回放会拒绝成为第二写者，默认桌面启动则复用该 Host。
+统一控制器使用当前 `cutrans.exe --role=host` 启动独立 Host，默认调用静态 Runtime；旧 `cutrans_vm_host.exe` 保留为动态 Pack 回退入口。两种入口都在独立进程中完成能力握手并持有 Runtime，可显式选择同一种动态 Pack。控制台只通过本机消息管道读取真实状态，不以 PID 冒充就绪；Detached 进程不会在控制台退出时被关闭。不同数据根使用不同管道和 `session/host.lock` 单实例锁，Host 运行时无头诊断和回放会拒绝成为第二写者，默认桌面启动则复用该 Host。
 
 - `start` 幂等，重复启动复用同一 `boot_id`；`status` 返回真实阶段、模式、ABI、文档指纹和上次是否异常中断。
 - `stop` 先进入 stopping 并保存文档，成功后才写 stopped；保存失败进入 degraded，保留 Host 供诊断和重试，不强杀进程。
 - 未正常停止的实例下次启动会标记 `last_shutdown_abnormal=1`，并继续增加 `boot_id`；正常停止后该标记清零。`restart` 必须先正常停止再启动。
 - `verify-host` 覆盖重复启动、第二 Host 和旧入口拒绝、幂等停止、保存失败重试、异常终止恢复及暂存目录纯净。人工 installed 布局与真实系统安装的验收须分别记录。
 
-`cutrans_vm.exe attach` 和独立 `cutrans_shell.exe` 已实现第一阶段 Shell 附着：ShellApi 经版本化 RPC 转发到 Host，关闭 Shell 不会销毁 Runtime，重开可恢复文档、目录和 Station。`shell_handshake` 只做身份与选择预检；前端正常返回并再次通过清单校验后，`shell_commit` 才原子更新选择锁。启动失败或异常终止不会提交 Shell，外部文档仍由 Host 授权打开。`status` 同时返回真实 `present_count`，`verify-attach` 据此验证普通启动、素材和播放，而不依赖同进程日志。默认 `cutrans_vm.exe` 与 `desktop` 都会启动或复用 Host，再显式附着桌面；不再创建第二个进程内 Runtime。低级附着使用 `attach` 或 `cutrans_shell.exe`，`library` 仅作为 NanoUI 的开发诊断入口。无头诊断与回放仍使用独立 Runtime，并拒绝成为 Host 的第二写者。Host已有独立导出作业驱动；统一 NanoUI 控制台和任务分页已接入，自动断线重连尚未实现。
+`cutrans.exe --role=shell` 经同一 `runAttached` 屏障运行链接进统一入口的 NanoUI 桌面；`--role=library` 同理进入独立资源库。旧 `cutrans_vm.exe attach` 和独立 `cutrans_shell.exe` 保留为回退路径。ShellApi 经版本化 RPC 转发到 Host，关闭 Shell 不会销毁 Runtime，重开可恢复文档、目录和 Station。`shell_handshake` 只做身份与选择预检；前端正常返回并再次通过清单校验后，`shell_commit` 才原子更新选择锁。启动失败或异常终止不会提交 Shell，外部文档仍由 Host 授权打开。`status` 同时返回真实 `present_count`，`verify-attach` 据此验证普通启动、素材和播放，而不依赖同进程日志。默认 `cutrans_vm.exe` 与 `desktop` 都会启动或复用 Host，再显式附着桌面；不再创建第二个进程内 Runtime。低级附着使用 `attach` 或 `cutrans_shell.exe`，`library` 仅作为 NanoUI 的开发诊断入口。无头诊断与回放仍使用独立 Runtime，并拒绝成为 Host 的第二写者。Host已有独立导出作业驱动；统一 NanoUI 控制台和任务分页已接入，自动断线重连尚未实现。
 
 ## 帧与播放
 
@@ -94,10 +94,27 @@ FrameSink 将预览 `offer`、GPU `submitted`、内容 `underflow` 和输出 `un
 
 `ProcessPort` 的 Job Object 是进程树资源管理边界，**不是安全沙箱**；`vm-pack.json` 也只是兼容性与依赖清单，**不是签名系统、安装器或回滚系统**。Runtime 与 Bootstrap 同进程运行，同样不构成不可信代码隔离。
 
-当前Host／Shell ABI10、Document API v1、Resource API v2；不稳定期明确拒绝旧接口。Runtime构造和命令执行使用自有栈，不要求外部调用方提供内部Zig大栈；工作线程、owner与渲染worker按职责分离，不能由创建线程的历史记录推断当前无持续驱动。
+当前Host／Shell ABI10、Document API v1、Resource API v4；不稳定期明确拒绝旧接口。Runtime构造和命令执行使用自有栈，不要求外部调用方提供内部Zig大栈；工作线程、owner与渲染worker按职责分离，不能由创建线程的历史记录推断当前无持续驱动。
 
 `session/runtime.lock` 记录 Runtime 与 Shell 的 id、version、abi 和清单 SHA-256，不记录宿主路径。默认包与锁不一致会拒绝启动；显式 `--runtime=<绝对目录>` 或 `--shell-dir=<绝对目录>` 才允许迁移或回滚，验证后原子更新选择。同 payload 重装和默认卸载都保留该锁。
 
 这还不是完整的 Runtime 管理器：没有多版本自动发现、频道下载或自动回滚；`runtime-pack.json` 与 `shell-pack.json` 是完整性清单，不是签名或安全沙箱。
 
 语义输入、录制与回放详见[命令参考](../reference/commands.md)；运行context、安装布局、数据及服务关闭策略见[环境隔离](../environment-isolation.md)。
+
+
+## EnvironmentSession 与启动屏障
+
+进入 App 之前，Host 附着、Shell 身份校验和一致 Runtime 快照必须已经成功。`vne/environment_session.zig` 以 Runtime 随机 epoch 建立不含物理路径的环境身份；它不包含数据根、资源目录、可执行路径或用户内容，也不代替授权。
+
+桌面、资源库和本机文件初始化必须取得有效 Session。App 建立后只使用环境身份和业务接口，环境失效仍由原 epoch／投影／RPC 错误处理，不回退到另一条物理路径暗中启动新实例。主 Host／Shell ABI 未改变。
+
+`ShellConfig` 的物理路径仍是过渡输入，未在本轮强行隐藏。`cutrans.exe` 已承担控制器、Host、桌面与资源库角色，角色仍是独立进程，Pack 完整性与 Shell 选择协议不变；旧 EXE 和 Pack 内旧入口继续作为回退。
+
+统一入口的 Host 默认使用静态 RuntimeProvider：`runtime/native_api.zig` 编成静态库链接进 EXE，经 `runtime/static_api.zig` 的同一 C ABI 调用，不需要 Runtime DLL。`bootstrap/activation.zig` 仍为静态／动态 Provider 共用选择锁、能力握手与 Shell 提交。静态锁身份来自内置语义描述而非磁盘文件哈希；显式 `--runtime=<绝对目录>` 保留动态 Pack，`--runtime=builtin` 用于显式静态选择与迁移。静态运行时的只读资源根是桌面 Payload，详见[静态 Runtime 记录](../memory/2026-11-09-static-runtime.md)。
+
+`vne/payload.zig` 区分 `builtin` 与 `legacy_shell`：`payload/desktop/` 和 `payload/nanoui-library/` 只携带资源、清单和许可证，`entry=builtin` 不要求旧 Shell EXE。`cutrans-payload/1` 复用大小与 SHA-256 文件校验，Shell 身份锁记录 Payload 清单哈希。默认缺失或损坏 Payload 不会隐式回退；只有显式 `--shell-dir` 才允许选择旧 Pack，旧入口行为不变。详见[PayloadSource 记录](../memory/2026-11-09-payload-source.md)。
+
+环境内安全退出已实现：`prepare_stop` 先停止新业务，`cancel_jobs` 复用持久协作取消，`resume_work` 可撤销尚未完成的退出，最终按既有 `stop` 暂停驱动、冲刷结果并保存。NanoUI 在 Host 正常停止前不关闭，失败可重试，草稿不自动提交；这不等于强制抢占或 OS 沙箱。详见[安全退出实施记录](../memory/2026-11-09-safe-exit.md)。
+
+资源内嵌和最终单文件发行仍未完成。具体启动屏障见[环境先验记录](../memory/2026-11-09-environment-session.md)。

@@ -27,14 +27,15 @@ fn validRelative(path: []const u8) bool {
 }
 
 pub const shell_manifest_path = "shell-pack.json";
+pub const payload_manifest_path = "payload.json";
 
-fn verifyMetadata(manifest: Manifest, format: []const u8, entry: []const u8) !void {
+fn verifyMetadata(manifest: Manifest, format: []const u8, entry: []const u8, allow_builtin: bool) !void {
     if (!std.mem.eql(u8, manifest.format, format)) return error.InvalidRuntimePack;
     if (manifest.id.len == 0 or manifest.version.len == 0) return error.InvalidRuntimePack;
     if (!std.mem.eql(u8, manifest.abi, abi.nativeAbi())) return error.IncompatibleRuntimeAbi;
     if (!std.mem.eql(u8, manifest.entry, entry)) return error.InvalidRuntimeEntry;
     if (manifest.vm_schema != 1 or manifest.host_api != abi.version or manifest.document_schema != 3) return error.IncompatibleRuntimeSchema;
-    var has_entry = false;
+    var has_entry = allow_builtin and std.mem.eql(u8, entry, "builtin");
     for (manifest.files, 0..) |file, i| {
         if (!validRelative(file.path) or file.sha256.len != 64) return error.InvalidRuntimeFile;
         if (std.mem.eql(u8, file.path, manifest.entry)) has_entry = true;
@@ -51,8 +52,8 @@ fn verifyMetadata(manifest: Manifest, format: []const u8, entry: []const u8) !vo
     }
 }
 
-pub fn verifyKind(manifest: Manifest, format: []const u8, entry: []const u8, allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !void {
-    try verifyMetadata(manifest, format, entry);
+pub fn verifyKind(manifest: Manifest, format: []const u8, entry: []const u8, allow_builtin: bool, allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !void {
+    try verifyMetadata(manifest, format, entry, allow_builtin);
     for (manifest.files) |file| {
         const bytes = try dir.readFileAlloc(io, file.path, allocator, .limited(64 * 1024 * 1024));
         defer allocator.free(bytes);
@@ -65,24 +66,28 @@ pub fn verifyKind(manifest: Manifest, format: []const u8, entry: []const u8, all
 }
 
 pub fn verify(manifest: Manifest, allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !void {
-    return verifyKind(manifest, "cutrans-runtime-pack/1", abi.runtimeLibraryName(), allocator, io, dir);
+    return verifyKind(manifest, "cutrans-runtime-pack/1", abi.runtimeLibraryName(), false, allocator, io, dir);
 }
 
 pub fn verifyShell(manifest: Manifest, allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !void {
-    return verifyKind(manifest, "cutrans-shell-pack/1", manifest.entry, allocator, io, dir);
+    return verifyKind(manifest, "cutrans-shell-pack/1", manifest.entry, false, allocator, io, dir);
 }
 
-fn verifyFileKind(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, path: []const u8, format: []const u8, entry: []const u8) !std.json.Parsed(Manifest) {
+pub fn verifyPayload(manifest: Manifest, allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !void {
+    return verifyKind(manifest, "cutrans-payload/1", "builtin", true, allocator, io, dir);
+}
+
+fn verifyFileKind(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, path: []const u8, format: []const u8, entry: []const u8, allow_builtin: bool) !std.json.Parsed(Manifest) {
     const text = try dir.readFileAlloc(io, path, allocator, .limited(256 * 1024));
     defer allocator.free(text);
     const parsed = try std.json.parseFromSlice(Manifest, allocator, text, .{ .ignore_unknown_fields = false, .allocate = .alloc_always });
     errdefer parsed.deinit();
-    try verifyKind(parsed.value, format, entry, allocator, io, dir);
+    try verifyKind(parsed.value, format, entry, allow_builtin, allocator, io, dir);
     return parsed;
 }
 
 pub fn verifyFile(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !std.json.Parsed(Manifest) {
-    return verifyFileKind(allocator, io, dir, manifest_path, "cutrans-runtime-pack/1", abi.runtimeLibraryName());
+    return verifyFileKind(allocator, io, dir, manifest_path, "cutrans-runtime-pack/1", abi.runtimeLibraryName(), false);
 }
 
 pub fn verifyShellFile(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !std.json.Parsed(Manifest) {
@@ -92,6 +97,10 @@ pub fn verifyShellFile(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir
     errdefer parsed.deinit();
     try verifyShell(parsed.value, allocator, io, dir);
     return parsed;
+}
+
+pub fn verifyPayloadFile(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !std.json.Parsed(Manifest) {
+    return verifyFileKind(allocator, io, dir, payload_manifest_path, "cutrans-payload/1", "builtin", true);
 }
 
 fn hex(bytes: []const u8) [64]u8 {
@@ -170,4 +179,30 @@ test "shell packs admit distinct entry points without weakening file verificatio
     try std.testing.expectError(error.MissingRuntimeEntry, verifyShell(missing, std.testing.allocator, std.testing.io, tmp.dir));
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "library.exe", .data = "modified" });
     try std.testing.expectError(error.RuntimeFileSizeMismatch, verifyShell(manifest, std.testing.allocator, std.testing.io, tmp.dir));
+}
+
+test "builtin payload verifies resources without a legacy executable" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "assets");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "assets/example.txt", .data = "payload" });
+    const digest = hex("payload");
+    const files = [_]File{.{ .path = "assets/example.txt", .byteLength = 7, .sha256 = &digest }};
+    const capabilities = [_][]const u8{"node.testsrc"};
+    const manifest = Manifest{
+        .format = "cutrans-payload/1",
+        .id = "desktop-shell",
+        .version = "0.1.0",
+        .abi = abi.nativeAbi(),
+        .entry = "builtin",
+        .vm_schema = 1,
+        .host_api = abi.version,
+        .document_schema = 3,
+        .required_capabilities = &capabilities,
+        .files = &files,
+    };
+    try verifyPayload(manifest, std.testing.allocator, std.testing.io, tmp.dir);
+    var legacy = manifest;
+    legacy.format = "cutrans-shell-pack/1";
+    try std.testing.expectError(error.MissingRuntimeEntry, verifyShell(legacy, std.testing.allocator, std.testing.io, tmp.dir));
 }

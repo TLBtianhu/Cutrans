@@ -17,6 +17,8 @@ REQUIRED_FILES = [
     "assets/examples/pngtest.png",
     "cutrans_vm_host.exe",
     "cutrans_shell.exe",
+    "payload/desktop/payload.json",
+    "payload/nanoui-library/payload.json",
 ]
 
 

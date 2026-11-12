@@ -33,7 +33,7 @@ from verify_workspace_rpc import MAX_PAYLOAD, Pipe, Workspace
 
 STALE, WRONG_EPOCH, CONFLICT, EXPIRED, BAD_SEQUENCE, CANDIDATE_CHANGED, WRONG_KIND, MISMATCH = 64, 65, 66, 67, 68, 70, 71, 72
 RELOCATE, ADOPT = 1, 2
-RESOURCE_API_VERSION = 3
+RESOURCE_API_VERSION = 4
 
 
 class Proof(c.Structure):
@@ -71,7 +71,8 @@ SubmitFn = c.CFUNCTYPE(c.c_int32, c.c_void_p, c.POINTER(Request), c.POINTER(Outc
 class Api(c.Structure):
     _fields_ = [("struct_size", c.c_uint32), ("api_version", c.c_uint32), ("context", c.c_void_p),
         ("snapshot", SnapshotFn), ("probe", ProbeFn), ("submit", SubmitFn),
-        ("work_snapshot", c.c_void_p), ("work_submit", c.c_void_p)]
+        ("work_snapshot", c.c_void_p), ("work_submit", c.c_void_p),
+        ("source_browse", c.c_void_p), ("source_read", c.c_void_p)]
 
 
 def request(proof, path, seq=1, client=(0xC2B1, 0xC2B2)):
@@ -97,7 +98,7 @@ class Native(AsyncNative):
         self.resources = Api()
         result = dll.cutrans_vm_resource_api(self.handle, c.byref(self.resources))
         require(result == OK and self.resources.struct_size == c.sizeof(Api) and self.resources.api_version == RESOURCE_API_VERSION
-            and self.resources.context == self.handle.value, "actual Runtime did not expose resource API v3")
+            and self.resources.context == self.handle.value, "actual Runtime did not expose resource API v4")
 
     def raw_resources(self, expected=None, buffer=None):
         info, length = Snapshot(), c.c_size_t(999)

@@ -4,7 +4,7 @@
 //! 才重算;它不是完整流协议或缓存系统。
 
 const std = @import("std");
-const documents = @import("documents.zig");
+const documents = @import("vne").documents;
 const image = @import("image.zig");
 
 pub const adapter_ids = [_][]const u8{ "node.testsrc", "node.gain", "node.invert", "node.over", "node.resize" };

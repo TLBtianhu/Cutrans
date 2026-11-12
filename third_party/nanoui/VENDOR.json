@@ -3,166 +3,32 @@
   "name": "nanoui",
   "official": {
     "repository": "https://github.com/justrach/nanoui",
-    "release": "v0.12.0",
-    "commit": "d1330a84fca9581cdcaff7fa71041b2cccf3066b",
-    "archive_sha256": "bc2978b4a9a75ec480ae93bd463a4efcbb21575ba8f47b0080045cf4785a4657"
+    "release": "v0.14.0",
+    "commit": "7b3227295d37982306eee7b87b3e1fbbb76b3970",
+    "archive_sha256": "8b8a2abba224dfda294e0c3b91144866137e48ecf60b5f11a5815cd0091c4765"
   },
-  "fork": {
-    "repository": "https://github.com/TLBtianhu/nanoui",
-    "branch": "otto-091",
-    "commit": "00e5813dc5f524ece9a8f4aa37878cb6be1d125e",
-    "version": "0.12.0",
-    "archive_sha256": "b147aefb0ef2804444a10612117cd17e782183383b9a9234bc800558016857eb",
-    "deviations_from_official": [
-      {
-        "change": "modified",
-        "path": "AGENTS.md"
-      },
-      {
-        "change": "modified",
-        "path": "build.zig"
-      },
-      {
-        "change": "modified",
-        "path": "examples/sgbus/onboarding.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/kit/display.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/ui/atlas_tt.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/ui/content.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/ui/frame_log.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/ui/images.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/ui/metal.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/ui/paint.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/ui/raster.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/ui/tester.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/ui/tests.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/ui/tests_images.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/ui/tests_raster.zig"
-      },
-      {
-        "change": "added",
-        "path": "src/ui/trace.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/ui/tt/font.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/ui/tt/fontdb.zig"
-      },
-      {
-        "change": "added",
-        "path": "src/ui/tt/fontindex.zig"
-      },
-      {
-        "change": "added",
-        "path": "src/ui/tt/fontindex_win.zig"
-      },
-      {
-        "change": "added",
-        "path": "src/ui/tt/fontmap.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/ui/tt/tests.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/ui/ui.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/ui/widgets.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/window_types.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/windows/app.zig"
-      },
-      {
-        "change": "added",
-        "path": "src/windows/frame_timing.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/windows/surface.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/windows/surface_gpu.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/windows/tests_surface.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/windows/win32.zig"
-      },
-      {
-        "change": "modified",
-        "path": "src/windows/window.zig"
-      }
-    ]
-  },
+  "base": "official",
+  "deviations_from_official": [],
   "local_patches": [
-    "src/ui/d3d11.zig",
-    "src/ui/d3d11_texture.zig",
-    "src/ui/raster.zig",
-    "src/ui/shader.hlsl",
-    "src/ui/tests_d3d11.zig",
     "src/ui/ui.zig",
+    "src/ui/widgets.zig",
     "src/window_types.zig",
     "src/windows/app.zig",
     "src/windows/surface_gpu.zig",
-    "src/windows/tests_window.zig",
     "src/windows/window.zig"
   ],
   "absorbed_pull_requests": [
+    34,
+    70,
     71,
     72,
+    73,
     75,
-    76
+    76,
+    116,
+    117
   ],
+  "absorbed_pull_requests_note": "Recorded IDs are provenance notes, not a contributor count; the official v0.14 base also contains other merged work and release changes.",
   "comparison": "source bytes with CRLF normalized to LF; provenance files excluded",
-  "checked_on": "2026-11-06"
+  "checked_on": "2026-11-10"
 }

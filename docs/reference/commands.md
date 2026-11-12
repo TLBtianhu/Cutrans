@@ -13,6 +13,7 @@
 | `attach` | 低级Shell附着 |
 | `library` | 开发诊断NanoUI候选Shell |
 | `activate-runtime --runtime=<绝对目录>` | Host停止后验证候选并提交Runtime选择 |
+| `--runtime=<绝对目录>／builtin` | 显式选择动态Runtime Pack，或在统一入口中选择内置静态Runtime并允许身份迁移 |
 | `--mode=development\|portable\|installed` | 必须与context声明形态一致 |
 | `--purpose=verification\|diagnostic\|replay` | 非normal用途必须显式独立data |
 | `--data=<绝对路径>` | 显式实例数据，仍受产品／形态／用途及路径边界检查 |
@@ -24,7 +25,15 @@
 | `--playback=N` | 桌面／GPU就绪后播放有限静态序列，1～600帧 |
 | `--assets-demo` | 合成素材验证路径，不是普通用户打开动作 |
 
+统一 `cutrans.exe` 默认使用内置静态 Runtime。显式绝对目录仍选择经过完整校验的动态 Runtime Pack；已有不同 Runtime 身份必须显式迁移，`--runtime=builtin` 只由统一入口接受。
+
 `cutrans_diag.exe --inspect`只读；写入诊断使用`--verify-data-dir=<独立绝对路径>`。正常便携启动见[使用指南](../guides/getting-started.md)。模式、用途、频道及默认路径由[环境隔离](../environment-isolation.md)统一定义。
+
+## 环境退出
+
+NanoUI 首页的“退出虚拟环境…”与窗口关闭不同：窗口关闭只离开 Shell，显式退出先停止新业务，再选择等待已有任务或协作取消，最后保存并停止 Host。退出中可以返回环境；保存失败会保留原因，修复后重试，不能显示已安全退出。草稿会持久保护，但不会替用户提交工作 revision。
+
+内部 `prepare_stop`、`cancel_jobs`、`resume_work` 是 Host 控制协议动作，不是追加到公开 EXE 的同名子命令。`--exit-demo` 仅用于隔离的隐藏 NanoUI 验证，不是普通启动方式。
 
 ## VM领域命令
 
@@ -69,7 +78,7 @@ output=c1
 
 `--replay=<VNE URI>` 在全新 Session 中自动区分版本化命令日志与语义输入日志。命令回放逐步校验结果并推进任务，对账文档指纹、History、Task 状态哈希、逻辑时间和导出 PNG；语义输入回放消费指针、按键、文本和焦点事件，不注入 OS 输入。`verify-replay` 在两个隔离数据根验证命令回放的一致结果，并拒绝结果不符、命令/输入时间倒退。
 
-Shell 已将指针移动/按钮、语义按键、UTF-8 文本和焦点事件接入 VM，现有 GLFW→ImGui 输入路径保持不变。`runtime/input_actions.zig` 将 `Ctrl+I`、`Ctrl+Z`、`Ctrl+Y` 映射到共享的添加 invert、撤销与重做命令，文本输入状态下抑制全局动作；不支持的修饰组合不产生命令。
+Shell 已将指针移动/按钮、语义按键、UTF-8 文本和焦点事件接入 VM，NanoUI 输入经 `consoles/gui/nanoui_input.zig` 桥接，不再依赖旧 GLFW→ImGui 栈。`runtime/input_actions.zig` 将 `Ctrl+I`、`Ctrl+Z`、`Ctrl+Y` 映射到共享的添加 invert、撤销与重做命令，文本输入状态下抑制全局动作；不支持的修饰组合不产生命令。
 
 `--record-input=<可写 VNE URI>` 可显式开启实时录制，例如 `--record-input=session://input/live.cvr`。独立桌面 Shell 通过 `input_begin/input_end` RPC 在 Host 持有的同一 Runtime 中开始和结束录制，不依赖旧的进程内 GUI。`cutrans_input_replay=3` 保存事件上下文、逐动作结果、基线文档指纹以及最终文档指纹和 History 游标；v1/v2 保持纯设备回放。当前可判定录制要求默认文档、空 History/Task 和未消费输入，尚未序列化任意会话基线，也不支持指针控件命中回放。录制包含文本，不应用于密码等敏感输入；当前不覆盖滚轮与 IME 组合状态，不注入 OS 输入，跨 OS 实机回放仍未实现。
 

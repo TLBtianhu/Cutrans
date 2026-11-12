@@ -4,7 +4,7 @@
 //! 解析先写临时 Registry,损坏输入不会覆盖调用方的最后有效状态。
 
 const std = @import("std");
-const command = @import("command.zig");
+const command = @import("vne").command;
 const tasks = @import("tasks.zig");
 const storage = @import("storage.zig");
 

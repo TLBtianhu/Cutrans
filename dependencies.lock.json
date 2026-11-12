@@ -12,12 +12,12 @@
     {
       "name": "nanoui",
       "path": "third_party/nanoui",
-      "upstream": "https://github.com/TLBtianhu/nanoui",
-      "declared_version": "0.12.0",
-      "upstream_revision": "00e5813dc5f524ece9a8f4aa37878cb6be1d125e",
-      "provenance": "See third_party/nanoui/VENDOR.md for official/fork/local layers.",
-      "effective_sha256": "9b4f4c6869bb01d101100f1a9f299d75eac55e397b2586f71edc396d359f259c",
-      "source_files": 805
+      "upstream": "https://github.com/justrach/nanoui",
+      "declared_version": "0.14.0",
+      "upstream_revision": "7b3227295d37982306eee7b87b3e1fbbb76b3970",
+      "provenance": "See third_party/nanoui/VENDOR.md; official v0.14 base plus six Cutrans local-patch files.",
+      "effective_sha256": "d946cb8d3982b8057c80c49cb0e69bf88f939e162386b0a071bb6bc61ca5d1f9",
+      "source_files": 455
     },
     {
       "name": "stb",

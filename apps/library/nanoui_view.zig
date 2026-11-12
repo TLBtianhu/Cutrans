@@ -134,7 +134,7 @@ fn sidebar(state: *State, c: *ui.Context) void {
     }
     ui.text(c, "虚拟资源目录", .{ .size = 17, .weight = .semibold });
     ui.label(c, "点击资源预览 · 右键整理文件夹与素材");
-    if (ui.button(c, "导入外部 PNG…", .{ .width = .fill }).clicked) state.pickExternal() catch |err| state.fail("外部素材导入失败", err);
+    if (ui.button(c, "从本机导入…", .{ .width = .fill }).clicked) state.pickExternal() catch |err| state.fail("外部素材导入失败", err);
     if (ui.button(c, "新建工作正文", .{ .width = .fill }).clicked) _ = state.createText("新建正文.txt") catch |err| state.fail("无法创建工作正文", err);
     ui.row(c, .{ .width = .fill, .gap = 8 });
     {
@@ -309,7 +309,10 @@ fn contextMenu(state: *State, c: *ui.Context) void {
 }
 
 pub fn view(state: *State, c: *ui.Context) void {
-    if (state.work) |*work| work.pump() catch |err| state.fail("草稿保存失败", err);
+    if (state.work) |*work| {
+        work.pump(false) catch |err| state.fail("草稿保存失败", err);
+        if (work.needsFrame()) c.frameIn(0.05);
+    }
     ui.column(c, .{ .width = .fill, .height = .fill, .padding = .all(20), .gap = 12 });
     defer ui.end(c);
     material(c, true);

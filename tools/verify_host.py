@@ -20,7 +20,7 @@ from verify_input import ABI_VERSION, hashes
 ROOT = Path(__file__).resolve().parents[1]
 from build_paths import OUTPUT
 from verification_paths import default_root, claim, retain, remove, check_root
-from verification_context import command_args, canonical_path
+from verification_context import command_args
 
 
 def run(command: list[str], expected: int = 0, env: dict[str, str] | None = None) -> str:
@@ -53,13 +53,8 @@ def invoke(console: Path, action: str, data: Path, mode: str, expected: int = 0)
 
 
 def host_pid(host: Path, data: Path, mode: str) -> int | None:
-    expected = f'"{canonical_path(host)}" --mode="{mode}" --purpose="verification" --data="{canonical_path(data)}"'
-    env = os.environ.copy()
-    env["CUTRANS_TEST_HOST_COMMAND"] = expected
-    env["CUTRANS_TEST_HOST_PATH"] = canonical_path(host)
-    script = "$p=Get-CimInstance Win32_Process -Filter \"Name='cutrans_vm_host.exe'\" | Where-Object { $_.ExecutablePath -ieq $env:CUTRANS_TEST_HOST_PATH -and $_.CommandLine -ieq $env:CUTRANS_TEST_HOST_COMMAND } | Select-Object -First 1; if ($p) { $p.ProcessId }"
-    output = run(["powershell", "-NoProfile", "-Command", script], env=env).strip()
-    return int(output) if output else None
+    from process_identity import find_pid
+    return find_pid(host, data, mode, role="host" if host.name.casefold() == "cutrans.exe" else None)
 
 
 def _verify(console: Path, host: Path, mode: str, root: Path) -> None:
@@ -89,7 +84,10 @@ def _verify(console: Path, host: Path, mode: str, root: Path) -> None:
         assert running == current, (running, current)
         output, duplicate = invoke(console, "start", data, mode)
         assert "already=1" in output and duplicate["boot"] == 1, duplicate
-        duplicate_output = run([str(host), f"--mode={mode}", f"--data={data}"], expected=1)
+        duplicate_command = [str(host)]
+        if host.name.casefold() == "cutrans.exe":
+            duplicate_command.append("--role=host")
+        duplicate_output = run([*duplicate_command, f"--mode={mode}", f"--data={data}"], expected=1)
         if "HostAlreadyRunning" not in duplicate_output:
             raise RuntimeError("second Host did not preserve the singleton instance lock")
         bootstrap = console.parent / "cutrans_bootstrap.exe"

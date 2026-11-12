@@ -85,6 +85,8 @@ pub extern "user32" fn IsZoomed(hwnd: HWND) callconv(.winapi) BOOL;
 pub extern "user32" fn IsIconic(hwnd: HWND) callconv(.winapi) BOOL;
 pub extern "user32" fn SetForegroundWindow(hwnd: HWND) callconv(.winapi) BOOL;
 pub extern "user32" fn GetForegroundWindow() callconv(.winapi) ?HWND;
+/// The calling thread's active window: a dialog's owner, kept beneath it.
+pub extern "user32" fn GetActiveWindow() callconv(.winapi) ?HWND;
 pub extern "user32" fn SetFocus(hwnd: HWND) callconv(.winapi) ?HWND;
 pub extern "user32" fn GetMessageW(msg: *MSG, hwnd: ?HWND, min: u32, max: u32) callconv(.winapi) BOOL;
 pub extern "user32" fn PeekMessageW(msg: *MSG, hwnd: ?HWND, min: u32, max: u32, remove: u32) callconv(.winapi) BOOL;
@@ -107,6 +109,20 @@ pub extern "user32" fn SetWindowTextW(hwnd: HWND, text: [*:0]const u16) callconv
 pub extern "user32" fn SetWindowLongPtrW(hwnd: HWND, index: i32, value: isize) callconv(.winapi) isize;
 pub extern "user32" fn GetWindowLongPtrW(hwnd: HWND, index: i32) callconv(.winapi) isize;
 pub extern "user32" fn AdjustWindowRectEx(rect: *RECT, style: u32, menu: BOOL, ex: u32) callconv(.winapi) BOOL;
+pub const HICON = *opaque {};
+
+/// Window icons: `WM_SETICON`'s slots, and the system's icon sizes.
+pub const WM_SETICON = 0x0080;
+pub const ICON_SMALL: WPARAM = 0;
+pub const ICON_BIG: WPARAM = 1;
+pub const SM_CXICON = 11;
+pub const SM_CYICON = 12;
+pub const SM_CXSMICON = 49;
+pub const SM_CYSMICON = 50;
+
+pub extern "user32" fn CreateIconFromResourceEx(presbits: ?*const anyopaque, dwResSize: u32, fIcon: BOOL, dwVer: u32, cxDesired: i32, cyDesired: i32, flags: u32) callconv(.winapi) ?HICON;
+pub extern "user32" fn DestroyIcon(hicon: HICON) callconv(.winapi) BOOL;
+
 pub extern "user32" fn GetSystemMetrics(index: i32) callconv(.winapi) i32;
 pub extern "user32" fn SetCapture(hwnd: HWND) callconv(.winapi) ?HWND;
 pub extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
@@ -258,6 +274,11 @@ pub extern "advapi32" fn RegGetValueW(hkey: usize, sub_key: [*:0]const u16, valu
 pub const HKEY_CURRENT_USER: usize = 0x80000001;
 /// RRF_RT_REG_DWORD: the value is read as a DWORD, whatever else the key holds.
 pub const RRF_RT_REG_DWORD = 0x00000010;
+/// Sets how the desktop window manager draws a window's frame. With
+/// `DWMWA_USE_IMMERSIVE_DARK_MODE` and a `BOOL`, whether its title bar is dark:
+/// documented from Windows 11, honoured from Windows 10 2004 (build 19041).
+pub extern "dwmapi" fn DwmSetWindowAttribute(hwnd: HWND, attribute: u32, value: *const anyopaque, size: u32) callconv(.winapi) i32;
+pub const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
 
 // Messages.
 pub const WM_DESTROY = 0x0002;
@@ -290,8 +311,6 @@ pub const SWP_NOACTIVATE: u32 = 0x0010;
 /// The frame changed: `WM_NCCALCSIZE` works the client area out again, which is
 /// how a client area that no longer belongs to the window is made to fit it.
 pub const SWP_FRAMECHANGED: u32 = 0x0020;
-/// Show without changing the window's z-order or activation state.
-pub const SWP_SHOWWINDOW: u32 = 0x0040;
 pub const WM_KEYDOWN = 0x0100;
 pub const WM_CHAR = 0x0102;
 pub const WM_SYSKEYDOWN = 0x0104;
@@ -335,8 +354,6 @@ pub const WS_EX_TOPMOST = 0x00000008;
 pub const WS_EX_APPWINDOW = 0x00040000;
 /// WS_EX_LAYERED is what `SetLayeredWindowAttributes` needs.
 pub const WS_EX_LAYERED = 0x00080000;
-/// A click does not activate the window or give it keyboard focus.
-pub const WS_EX_NOACTIVATE = 0x08000000;
 
 /// `GetWindowLongPtrW` / `SetWindowLongPtrW`: the extended style.
 pub const GWL_EXSTYLE: i32 = -20;
@@ -348,22 +365,9 @@ pub const LWA_ALPHA = 0x00000002;
 /// chain, which is why `surface.zig` draws with GDI while a window is
 /// translucent (`opacity < 1`).
 pub extern "user32" fn SetLayeredWindowAttributes(hwnd: HWND, key: u32, alpha: u8, flags: u32) callconv(.winapi) BOOL;
-/// `ShowWindow`: show without activating the window.
-pub const SW_SHOWNOACTIVATE = 4;
 pub const CS_DBLCLKS = 0x0008;
 pub const CW_USEDEFAULT: i32 = @bitCast(@as(u32, 0x80000000));
 pub const GWLP_USERDATA = -21;
-
-/// Whether an environment variable is set to something other than "0".
-pub fn envFlag(name: []const u8) bool {
-    if (name.len == 0 or name.len > 120) return false;
-    var key: [128]u16 = undefined;
-    for (name, 0..) |ch, i| key[i] = ch;
-    key[name.len] = 0;
-    var value: [64]u16 = undefined;
-    const n = GetEnvironmentVariableW(@ptrCast(&key), &value, value.len);
-    return n > 0 and n < value.len and value[0] != '0';
-}
 
 /// UTF-16 of `s`, null-terminated, in `buf` (truncated to fit, at a code
 /// point): a title that will not fit whole loses its tail, and one with

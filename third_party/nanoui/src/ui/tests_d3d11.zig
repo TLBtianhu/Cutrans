@@ -27,17 +27,19 @@ const d3d11 = @import("d3d11.zig");
 const Limits = struct { mean: f64, worst: u8, off_in: usize };
 
 /// A renderer for a parity test, or `null` when this machine has no Direct3D 11
-/// at all.
+/// at all, or no compiler for its shaders: `d3dcompiler_47` missing, or
+/// Wine's, which compiles too little HLSL for them (`error.ShaderCompilerUnavailable`
+/// only under Wine; on Windows a shader that will not compile still fails).
 ///
 /// The distinction is the point: `error.NoDevice` means there is no device to
 /// test with, and a skip is honest. Every other error — a shader that will not
 /// compile, a buffer that will not be made — is a bug in this repository and
 /// must fail the test. Sharing one error name between the two is what let a
 /// broken shader look like a machine without a GPU.
-fn renderer() !?d3d11.Renderer {
+pub fn renderer() !?d3d11.Renderer {
     return d3d11.Renderer.init() catch |e| {
-        if (e == error.NoDevice) {
-            std.debug.print("no Direct3D 11 here: {t} ", .{e});
+        if (e == error.NoDevice or e == error.ShaderCompilerMissing or e == error.ShaderCompilerUnavailable) {
+            std.debug.print("no Direct3D 11 renderer here: {t} ", .{e});
             return null;
         }
         std.debug.print("[d3d11] Renderer.init failed: {t}\n", .{e});
@@ -79,10 +81,10 @@ fn drawnPixels(px: gpu.Pixels, clear: ui.Color) usize {
 /// against a CPU frame that is also mostly background can pass while the GPU
 /// drew nothing at all, which is exactly what a wrong `Instance` stride does.
 /// So the frame has to have content before it is compared.
-fn drawThenRead(r: *d3d11.Renderer, t: *ui.Tester, clear: ui.Color) !gpu.Pixels {
+pub fn drawThenRead(r: *d3d11.Renderer, t: *ui.Tester, clear: ui.Color) !gpu.Pixels {
     const gpa = testing.allocator;
     r.sync(t.text.atlas.mask(), t.text.atlas.generation, t.text.images.pictures(), t.text.images.generation);
-    r.draw(t.instances.items, t.ctx.textures.items, t.size, t.scale, clear, null);
+    r.draw(t.instances.items, t.size, t.scale, clear, null);
     const px = try r.read(gpa);
     if (drawnPixels(px, clear) == 0) {
         px.deinit(gpa);
@@ -126,91 +128,6 @@ fn compare(t: *ui.Tester, limits: Limits) !void {
     // ClearType's colour fringes on text differ by design, and how many is the
     // text's business, not the renderer's.
     try testing.expect(off * limits.off_in < ours.bytes.len);
-}
-
-const TextureScene = struct {
-    first: gpu.Texture,
-    second: gpu.Texture,
-    uv: [4]f32 = .{ 0, 0, 1, 1 },
-
-    fn view(scene: *TextureScene, c: *ui.Context) void {
-        ui.row(c, .{ .padding = .all(8), .gap = 8 });
-        defer ui.end(c);
-        ui.texture(c, .{ .width = .{ .px = 64 }, .height = .{ .px = 64 }, .radius = 6 }, scene.first, scene.uv, 0.75);
-        ui.texture(c, .{ .width = .{ .px = 64 }, .height = .{ .px = 64 }, .radius = 6 }, scene.second, .{ 0, 0, 1, 1 }, 1);
-    }
-};
-
-test "d3d11: dynamic textures match CPU with stride, UV, multiple slots and resizing" {
-    var a: [40]u8 = @splat(0);
-    const a_colors = [_][4]u8{
-        .{ 10, 20, 30, 255 },
-        .{ 40, 50, 60, 255 },
-        .{ 70, 80, 90, 255 },
-        .{ 100, 110, 120, 255 },
-    };
-    for (a_colors, 0..) |color, index| {
-        const x = index % 2;
-        const y = index / 2;
-        @memcpy(a[y * 20 + x * 4 ..][0..4], &color);
-    }
-    var b: [16]u8 = @splat(0);
-    @memcpy(b[0..4], &[_]u8{ 130, 140, 150, 255 });
-    @memcpy(b[12..16], &[_]u8{ 160, 170, 180, 255 });
-    var scene: TextureScene = .{
-        .first = .{ .width = 2, .height = 2, .bgra = &a, .stride = 20 },
-        .second = .{ .width = 1, .height = 2, .bgra = &b, .stride = 12 },
-    };
-    var t: ui.Tester = undefined;
-    try t.init(testing.allocator, .init(&scene, TextureScene.view), .{ .width = 160, .height = 90, .scale = 1 });
-    defer t.deinit();
-    t.settle(0.1);
-    try compare(&t, .{ .mean = 1.5, .worst = 32, .off_in = 100 });
-
-    scene.uv = .{ 0, 0, 0.5, 0.5 };
-    t.settle(0.1);
-    try compare(&t, .{ .mean = 1.5, .worst = 32, .off_in = 100 });
-
-    var resized: [16]u8 = @splat(0);
-    @memcpy(resized[0..4], &[_]u8{ 190, 200, 210, 255 });
-    @memcpy(resized[12..16], &[_]u8{ 220, 230, 240, 255 });
-    scene.first = .{ .width = 1, .height = 2, .bgra = &resized, .stride = 12 };
-    t.settle(0.1);
-    try compare(&t, .{ .mean = 1.5, .worst = 32, .off_in = 100 });
-}
-
-test "d3d11: one dynamic texture preserves BGRA channels and row stride" {
-    const gpa = testing.allocator;
-    var maybe = try renderer();
-    if (maybe == null) return error.SkipZigTest;
-    var r = &maybe.?;
-    defer r.deinit();
-    var bytes: [40]u8 = @splat(0);
-    const colors = [_][4]u8{
-        .{ 10, 20, 30, 255 },
-        .{ 40, 50, 60, 255 },
-        .{ 70, 80, 90, 255 },
-        .{ 100, 110, 120, 255 },
-    };
-    for (colors, 0..) |color, index| {
-        const x = index % 2;
-        const y = index / 2;
-        @memcpy(bytes[y * 20 + x * 4 ..][0..4], &color);
-    }
-    const sources = [_]gpu.Texture{.{ .width = 2, .height = 2, .bgra = &bytes, .stride = 20 }};
-    const quad = [_]gpu.Instance{.{
-        .rect = .{ 0, 0, 2, 2 },
-        .color = .{ 1, 1, 1, 1 },
-        .uv = .{ 0, 0, 1, 1 },
-        .kind = gpu.Kind.texture,
-        .border_width = 0,
-    }};
-    r.draw(&quad, &sources, .{ .w = 2, .h = 2 }, 1, .{ .r = 0, .g = 0, .b = 0, .a = 1 }, null);
-    const px = try r.read(gpa);
-    defer px.deinit(gpa);
-    for (colors, 0..) |expected, index| {
-        try testing.expectEqualSlices(u8, &expected, px.bytes[index * 4 ..][0..4]);
-    }
 }
 
 test "d3d11: shapes match the CPU renderer" {
@@ -260,7 +177,7 @@ test "d3d11: a coloured quad keeps its channels" {
         .{ .rect = .{ 10, 0, 10, 30 }, .color = .{ 0, 1, 0, 1 } },
         .{ .rect = .{ 20, 0, 10, 30 }, .color = .{ 0, 0, 1, 1 } },
     };
-    r.draw(&quads, &.{}, .{ .w = 30, .h = 30 }, 1, clear, null);
+    r.draw(&quads, .{ .w = 30, .h = 30 }, 1, clear, null);
     const px = try r.read(gpa);
     defer px.deinit(gpa);
 
@@ -295,7 +212,7 @@ test "d3d11: ClearType coverage blends each color channel" {
         .uv = .{ 0, 0, 1, 1 },
         .kind = gpu.Kind.text,
     }};
-    r.draw(&glyph, &.{}, .{ .w = 1, .h = 1 }, 1, .{ .r = 0.2, .g = 0.4, .b = 0.6, .a = 1 }, null);
+    r.draw(&glyph, .{ .w = 1, .h = 1 }, 1, .{ .r = 0.2, .g = 0.4, .b = 0.6, .a = 1 }, null);
     const px = try r.read(gpa);
     defer px.deinit(gpa);
     // BGRA: round(background * (1 - RGB coverage) + foreground * RGB coverage).
@@ -335,7 +252,7 @@ fn drawNativeGlyph(r: *d3d11.Renderer, rect: [4]f32, scale: f32, side: f32) !gpu
         .uv = .{ 0, 0, 1, 1 },
         .kind = gpu.Kind.text,
     }};
-    r.draw(&glyph, &.{}, .{ .w = side, .h = side }, scale, .{ .r = 0.2, .g = 0.4, .b = 0.6, .a = 1 }, null);
+    r.draw(&glyph, .{ .w = side, .h = side }, scale, .{ .r = 0.2, .g = 0.4, .b = 0.6, .a = 1 }, null);
     return r.read(testing.allocator);
 }
 
@@ -465,7 +382,7 @@ test "d3d11: the sizes a drag passes through keep every glass target alive" {
             .border_width = 1,
             .kind = gpu.Kind.glass,
         }) catch return;
-        r.draw(instances.items, &.{}, .{ .w = s[0], .h = s[1] }, 2, clear, null);
+        r.draw(instances.items, .{ .w = s[0], .h = s[1] }, 2, clear, null);
         try testing.expect(r.frame.texture != null and r.frame.rtv != null and r.frame.srv != null);
         try testing.expect(r.a.texture != null and r.a.rtv != null and r.a.srv != null);
         try testing.expect(r.b.texture != null and r.b.rtv != null and r.b.srv != null);

@@ -12,6 +12,7 @@ const types = @import("types.zig");
 const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 const Color = types.Color;
+const tooltip_mod = @import("tooltip.zig");
 
 pub const Div = struct {
     c: *Context,
@@ -136,6 +137,16 @@ pub const Div = struct {
     // Looks.
     pub fn bg(d: Div, color: Color) Div {
         return d.set("background", @as(?Color, color));
+    }
+    /// The background fades to `color` at the bottom.
+    pub fn gradient(d: Div, color: Color) Div {
+        return d.set("gradient", color);
+    }
+    /// The background is a gradient of many stops down `anchor` (from
+    /// the box's top left; null the box itself): `Style.gradient_stops`.
+    pub fn gradientStops(d: Div, stops: []const types.GradientStop, anchor: ?types.Rect) Div {
+        _ = d.set("gradient_anchor", anchor);
+        return d.set("gradient_stops", stops);
     }
     pub fn border(d: Div, color: Color) Div {
         return d.set("border", @as(?Color, color));
@@ -282,6 +293,18 @@ pub const Div = struct {
 
     pub fn hovered(d: Div) bool {
         return d.c.interact(d.index, .{}).hovered;
+    }
+
+    /// Delayed help without making a decorative box take the pointer.
+    pub fn tooltip(d: Div, text: []const u8, opts: tooltip_mod.Options) Div {
+        tooltip_mod.tooltip(d.c, d.index, text, opts);
+        return d;
+    }
+
+    /// Content drawn after the view, in a tooltip's own overlay box.
+    pub fn tooltipWith(d: Div, ptr: anytype, comptime draw_fn: fn (@TypeOf(ptr), *Context) void, opts: tooltip_mod.Options) Div {
+        tooltip_mod.tooltipWith(d.c, d.index, ptr, draw_fn, opts);
+        return d;
     }
 
     pub fn end(d: Div) void {

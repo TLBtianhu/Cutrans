@@ -8,7 +8,6 @@ const Context = ctx_mod.Context;
 const Interaction = ctx_mod.Interaction;
 const Color = types.Color;
 const Style = types.Style;
-const ImageSource = @import("images.zig").Source;
 
 /// Gives the next box a key, so its id (and its animations, scroll, caret)
 /// follow it when boxes before it come and go: items of lists.
@@ -85,7 +84,12 @@ pub fn text(c: *Context, str: []const u8, style: types.TextStyle) void {
 }
 
 /// Text whose byte ranges `spans` have colors of their own (ANSI output,
-/// syntax highlighting).
+/// syntax highlighting, a search's match).
+///
+/// `spans` is kept until the frame is laid out, which is after the view
+/// function returns: it has to outlive the call — a comptime literal, or
+/// memory the app holds. An app building spans per frame keeps an arena for
+/// them and resets it as the next frame starts.
 pub fn richText(c: *Context, str: []const u8, spans: []const types.Span, style: types.TextStyle) void {
     const color = style.color orelse c.theme.text;
     const width: types.Length = if (style.wrap) .fill else .auto;
@@ -115,13 +119,14 @@ pub fn icon(c: *Context, name: []const u8, opts: IconOptions) void {
 }
 
 pub const ImageOptions = struct {
-    /// Names the picture: its bytes or pixels are read once for each size
-    /// it is drawn at, so new content needs a key of its own.
+    /// Names the picture: its source is read once for each size, so new content
+    /// needs a new key.
     key: []const u8,
-    /// The picture: its encoded bytes (PNG; on macOS anything ImageIO
-    /// reads), or pixels the app already has (BGRA, premultiplied). Kept by
-    /// the caller while it is shown.
-    source: ImageSource,
+    /// Encoded bytes, or caller-held premultiplied BGRA pixels. Kept by the
+    /// caller while the picture is shown.
+    source: @import("images.zig").Source = .{ .encoded = "" },
+    /// Shorthand for `source = .{ .encoded = bytes }`.
+    bytes: ?[]const u8 = null,
     /// The most room it takes, in points; it keeps its proportions and is
     /// never drawn larger than its pixels at `scale`.
     max_width: f32 = 480,
@@ -134,17 +139,47 @@ pub const ImageOptions = struct {
     /// Draws only the picture's shape, in this color: a monochrome mark (a
     /// logo) that follows the theme.
     tint: ?types.Color = null,
+    /// Exactly this box in points, whatever the picture's proportions: for
+    /// a size decided elsewhere (a page's `<img width>`). `max_width`,
+    /// `max_height` and `scale` then mean nothing.
+    box: ?types.Size = null,
+    /// The part of the picture shown, 0 to 1: left, top, right, bottom. With
+    /// `box`, a picture that covers its box and is cut to fit.
+    part: [4]f32 = .{ 0, 0, 1, 1 },
 };
 
-/// A picture; false (and nothing drawn) if it can't be read.
+/// What pictures may cost in this view's window (`images.Limits`): an app that
+/// shows large ones asks here, before drawing them.
+pub fn imageLimits(c: *Context, limits: @import("images.zig").Limits) void {
+    c.text.images.limits = limits;
+}
+
+/// Whether pictures of a MIME type can be decoded on this system.
+pub fn imageTypeDecodes(mime: []const u8) bool {
+    return @import("images.zig").decodes(mime);
+}
+
+/// A picture's own size in pixels, from its header; null if it can't be
+/// read. Same key as `image`: read once.
+pub fn imageSize(c: *Context, key_name: []const u8, bytes: []const u8) ?types.Size {
+    const e = c.text.images.info(@import("images.zig").Images.key(key_name), .{ .encoded = bytes }) orelse return null;
+    return .{ .w = @floatFromInt(e.width), .h = @floatFromInt(e.height) };
+}
+
+/// A picture; false (and nothing drawn) if its source can't be read.
 pub fn image(c: *Context, opts: ImageOptions) bool {
+    const src: @import("images.zig").Source = if (opts.bytes) |b| .{ .encoded = b } else opts.source;
     const k = @import("images.zig").Images.key(opts.key);
     // Sized from the picture's header; decoded at device size and packed only when drawn.
-    const e = c.text.images.info(k, opts.source) orelse return false;
+    const e = c.text.images.info(k, src) orelse return false;
+    if (opts.box) |b| {
+        _ = c.leaf(.{ .width = .{ .px = b.w }, .height = .{ .px = b.h }, .radius = opts.radius }, .{ .image = .{ .key = k, .source = src, .opacity = opts.opacity, .tint = opts.tint, .part = opts.part } }, null);
+        return true;
+    }
     const w: f32 = @as(f32, @floatFromInt(e.width)) / @max(opts.scale, 0.5);
     const h: f32 = @as(f32, @floatFromInt(e.height)) / @max(opts.scale, 0.5);
     const s = @min(1, @min(opts.max_width / @max(w, 1), opts.max_height / @max(h, 1)));
-    _ = c.leaf(.{ .width = .{ .px = @round(w * s) }, .height = .{ .px = @round(h * s) }, .radius = opts.radius }, .{ .image = .{ .key = k, .source = opts.source, .opacity = opts.opacity, .tint = opts.tint } }, null);
+    _ = c.leaf(.{ .width = .{ .px = @round(w * s) }, .height = .{ .px = @round(h * s) }, .radius = opts.radius }, .{ .image = .{ .key = k, .source = src, .opacity = opts.opacity, .tint = opts.tint, .part = opts.part } }, null);
     return true;
 }
 
@@ -163,6 +198,9 @@ pub const SvgOptions = struct {
     /// the theme). Null draws its own colors, `currentColor` as the
     /// theme's text.
     color: ?Color = null,
+    /// `currentColor` when it isn't the theme's text (a page's picture, whose
+    /// documents start from black).
+    current: ?Color = null,
     opacity: f32 = 1,
 };
 
@@ -175,7 +213,7 @@ pub fn svg(c: *Context, opts: SvgOptions) bool {
     const ph: u32 = @intFromFloat(@max(1, @round(h * c.scale)));
     // Tinted, it's drawn white and filled with the color as it's painted;
     // otherwise currentColor is the theme's text, part of what it's kept by.
-    const cur = if (opts.color != null) Color{ .r = 1, .g = 1, .b = 1 } else c.theme.text;
+    const cur = if (opts.color != null) Color{ .r = 1, .g = 1, .b = 1 } else opts.current orelse c.theme.text;
     var hasher = std.hash.Wyhash.init(0x5c6);
     hasher.update(opts.key);
     hasher.update(std.mem.asBytes(&[2]u32{ pw, ph }));
@@ -193,6 +231,20 @@ pub fn texture(c: *Context, style: types.Style, source: @import("gpu.zig").Textu
     const slot: u32 = @intCast(c.textures.items.len);
     c.textures.append(c.gpa, source) catch return;
     _ = c.leaf(style, .{ .texture = .{ .slot = slot, .uv = uv, .opacity = opacity } }, null);
+}
+
+/// `texture`, its box mapped by `m`, a 2×2 matrix (row major: x' = m[0]·x
+/// + m[1]·y, y' = m[2]·x + m[3]·y) about the style's rotation anchor (its
+/// middle unless the style says), after the style's rotation: a shear, a
+/// non-uniform scale or a mirror on top of a turn — a compositor's layer
+/// transform, drawn by the GPU as any texture is (and by the CPU renderer
+/// the same). Its rounded corners and its uv go with it; the clip does not.
+pub fn textureAffine(c: *Context, style: types.Style, source: @import("gpu.zig").Texture, uv: [4]f32, opacity: f32, m: [4]f32) void {
+    const slot: u32 = @intCast(c.textures.items.len);
+    c.textures.append(c.gpa, source) catch return;
+    // The identity is no map at all: zero says so to the shaders.
+    const none = m[0] == 1 and m[1] == 0 and m[2] == 0 and m[3] == 1;
+    _ = c.leaf(style, .{ .texture = .{ .slot = slot, .uv = uv, .opacity = opacity, .affine = if (none) .{ 0, 0, 0, 0 } else m } }, null);
 }
 
 /// A see-through box filling its parent, its corners rounded by `radius`:
@@ -221,9 +273,24 @@ pub const ButtonOptions = struct {
     disabled: bool = false,
     /// An SF Symbol shown before the title (alone if the title is empty).
     icon: []const u8 = "",
+    /// Windows: this button is the hidden title bar's maximize box, so the
+    /// system reports HTMAXBUTTON and its snap-layout flyout works.
+    window_maximize: bool = false,
 };
 
 pub fn button(c: *Context, title: []const u8, opts: ButtonOptions) Interaction {
+    if (@import("../rt.zig").enabled) {
+        const Ext = struct {
+            extern fn nanoui_rt_widget_button(c: *Context, lbl_ptr: [*]const u8, lbl_len: usize, opts_ptr: *const ButtonOptions, out: *Interaction) callconv(.c) void;
+        };
+        var out: Interaction = undefined;
+        Ext.nanoui_rt_widget_button(c, title.ptr, title.len, &opts, &out);
+        return out;
+    }
+    return buttonImpl(c, title, opts);
+}
+
+pub fn buttonImpl(c: *Context, title: []const u8, opts: ButtonOptions) Interaction {
     const th = c.theme;
     const i = c.open(.{
         .direction = .row,
@@ -234,6 +301,7 @@ pub fn button(c: *Context, title: []const u8, opts: ButtonOptions) Interaction {
         .justify = .center,
         .opacity = if (opts.disabled) 0.45 else 1,
         .control = true,
+        .window_maximize = opts.window_maximize,
     }, null);
     defer c.end();
     var it = c.interact(i, .{});

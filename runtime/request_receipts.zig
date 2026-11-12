@@ -24,6 +24,18 @@ pub fn Book(comptime Outcome: type, comptime capacity: usize) type {
             self.clients.deinit();
         }
 
+        /// Seed a client's persistent high-water mark after a Runtime restart.
+        /// The receipt ring may have evicted the original outcome, but a sequence
+        /// at or below this mark must never execute again.
+        pub fn seed(self: *Self, client: [2]u64, high: u64) !void {
+            if (self.clients.get(client)) |existing| {
+                if (existing < high) try self.clients.put(client, high);
+                return;
+            }
+            if (self.clients.count() >= self.client_limit) return;
+            try self.clients.put(client, high);
+        }
+
         /// Caller checks nonzero client/sequence and Runtime epoch first, and
         /// serializes prepare/effect/record. No other prepare may invalidate the
         /// ready pointer before record; operation errors still need a receipt.
@@ -60,6 +72,20 @@ pub fn hashNumber(hash: *std.crypto.hash.sha2.Sha256, value: u64) void {
     var bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &bytes, value, .little);
     hash.update(&bytes);
+}
+
+test "a seeded persistent high-water refuses evicted sequences" {
+    const T = Book(u64, 1);
+    const digest: [32]u8 = @splat(1);
+    const client = [2]u64{ 9, 10 };
+    var book = T.init(std.testing.allocator, 1);
+    defer book.deinit();
+    try book.seed(client, 7);
+    try std.testing.expectEqual(T.Refusal.expired, (try book.prepare(client, 7, digest)).refused);
+    try std.testing.expectEqual(T.Refusal.bad_sequence, (try book.prepare(client, 9, digest)).refused);
+    const ready = (try book.prepare(client, 8, digest)).ready;
+    book.record(ready, client, 8, digest, 80);
+    try std.testing.expectEqual(@as(u64, 80), (try book.prepare(client, 8, digest)).replayed);
 }
 
 test "bounded receipts retain client high-water and fail before effects on allocation" {

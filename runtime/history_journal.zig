@@ -4,7 +4,7 @@
 //! 编码。先完整解析并验证指纹,再一次替换 History,坏文件不会清空有效撤销栈。
 
 const std = @import("std");
-const documents = @import("documents.zig");
+const documents = @import("vne").documents;
 const history = @import("history.zig");
 const storage = @import("storage.zig");
 

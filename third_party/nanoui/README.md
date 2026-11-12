@@ -4,18 +4,19 @@
 
 <h1 align="center">nanoui</h1>
 
-<p align="center">Desktop apps in Zig, with native UI drawn on the GPU or a web frontend.</p>
+<p align="center">Desktop and mobile apps in Zig, with native UI drawn on the GPU or a web frontend.</p>
 
 <p align="center"><sub>Meet Nano. <a href="docs/images/nano-transparent.png">Transparent PNG</a> · <a href="docs/images/nano-paper.png">Original paper illustration</a></sub></p>
 
-<p align="center">Want to see it in use? <a href="https://github.com/justrach/nanoterm"><strong>nanoterm</strong></a> is a terminal with a coding agent, and <a href="https://github.com/justrach/nanomon"><strong>nanomon</strong></a> an activity monitor, both built on nanoui.</p>
+<p align="center">Want to see it in use? <a href="https://github.com/justrach/nanoterm"><strong>nanoterm</strong></a> is a terminal with a coding agent, <a href="https://github.com/justrach/nanomon"><strong>nanomon</strong></a> an activity monitor, <a href="https://github.com/justrach/nanostudio"><strong>nanostudio</strong></a> a screen recorder, <a href="https://github.com/justrach/nanofly"><strong>nanofly</strong></a> a live flight tracker, <a href="https://github.com/gstohl/nanomail"><strong>nanomail</strong></a> a JMAP mail client, <a href="https://github.com/justrach/nanolight"><strong>nanolight</strong></a> a cross-platform launcher, <a href="https://github.com/justrach/nanodocs"><strong>nanodocs</strong></a> a Markdown &amp; HTML studio and agent shelf, <a href="apps/nanobrowser"><strong>nanobrowser</strong></a> a browser engine in Zig, and <a href="apps/nanocua"><strong>nanocua</strong></a> a computer-use MCP app.</p>
 
 <p align="center">
-  <img alt="macOS · Linux · Windows" src="https://img.shields.io/badge/macOS%20·%20Linux%20·%20Windows-555">
+  <img alt="macOS · iOS · Android · Linux · Windows" src="https://img.shields.io/badge/macOS%20·%20iOS%20·%20Android%20·%20Linux%20·%20Windows-555">
   <img alt="Apps of about 0.7 MB" src="https://img.shields.io/badge/apps-~0.7%20MB-44cc11">
   <img alt="One dependency, the author's own http-zig, on Linux and Windows only" src="https://img.shields.io/badge/dependencies-1%20(own)-44cc11">
   <img alt="Built in Zig 0.17" src="https://img.shields.io/badge/built%20in-Zig%200.17-f7a41d?logo=zig&logoColor=white">
   <img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue">
+  <a href="https://discord.gg/EmTpv7rmTA"><img alt="Discord" src="https://img.shields.io/badge/Discord-nanoui-5865F2?logo=discord&logoColor=white"></a>
 </p>
 
 <p align="center">
@@ -26,7 +27,8 @@
   <a href="#platforms">Platforms</a> ·
   <a href="#apps">Apps</a> ·
   <a href="#performance">Performance</a> ·
-  <a href="#credits">Credits</a>
+  <a href="#credits">Credits</a> ·
+  <a href="https://discord.gg/EmTpv7rmTA">Discord</a>
 </p>
 
 <p align="center">
@@ -37,10 +39,12 @@ Each window shows one of two kinds of interface:
 
 - **Native UI**, written in Zig alone and drawn by nanoui: no HTML, no
   JavaScript, no webview. It has flexbox layout, text in a glyph atlas,
-  animations, and views you can test without a window. On macOS it draws with
-  Metal and CoreText, in one instanced draw call per frame.
-- **A web page** in the system webview (WKWebView on macOS, WebView2 on
-  Windows, WebKitGTK on Linux). The
+  animations, and views you can test without a window. On macOS and iOS it
+  draws with Metal and CoreText, in one instanced draw call per frame; on
+  Linux and Android with OpenGL (or its CPU renderer); on Windows with
+  Direct3D 11.
+- **A web page** in the system webview (WKWebView on macOS and iOS, WebView2
+  on Windows, WebKitGTK on Linux). The
   frontend calls Zig through a JavaScript client generated from your Zig
   types, with TypeScript declarations.
 
@@ -87,7 +91,7 @@ with (`--nanoui REF` for another, `--local PATH` for a checkout). The app's
 To add nanoui to a project of your own instead:
 
 ```sh
-zig fetch --save git+https://github.com/justrach/nanoui#v0.5.0
+zig fetch --save git+https://github.com/justrach/nanoui#v0.13.0
 ```
 
 Releases are tagged `vMAJOR.MINOR.PATCH`, as mygo's are, and each is listed
@@ -338,9 +342,9 @@ Android's SDK and NDK). On a Mac, `zig build -Dtarget=x86_64-linux-gnu` or
 
 | | macOS | iOS | Android | Linux | Windows |
 |---|---|---|---|---|---|
-| windows, input, timers | AppKit | UIKit: screens over each other, touch, keyboards | NativeActivity: screens over each other, touch, keyboards, Back | GTK 4, else GTK 3 (loaded with `dlopen`) | Win32 |
+| windows, input, timers | AppKit | UIKit: screens over each other, touch, keyboards | NativeActivity: screens over each other, touch, keyboards, Back | GTK 4, else GTK 3 (loaded with `dlopen`); `layer_shell` windows are Wayland layer surfaces (gtk4-layer-shell) | Win32 |
 | text | CoreText | CoreText | nanoui's TrueType reader, Android's fonts | nanoui's TrueType reader (`src/ui/tt/`) | the same |
-| rendering | Metal | Metal | OpenGL ES 3; CPU without it | OpenGL 3.3 in a GtkGLArea; CPU (`src/ui/raster.zig`) without one | CPU, shown by Direct3D 11 (a DXGI flip swap chain; GDI without it) |
+| rendering | Metal | Metal | OpenGL ES 3; CPU without it | OpenGL in a GtkGLArea: desktop GL 3.3 or OpenGL ES 3, whichever GTK gives; CPU only with `NANOUI_RENDERER=cpu` | CPU, shown by Direct3D 11 (a DXGI flip swap chain; GDI without it) |
 | icons | SF Symbols | SF Symbols | line icons drawn by nanoui (`src/ui/icons.zig`) | the same | the same |
 | SVG (`ui.svg`) | drawn by nanoui (`src/ui/svg.zig`) | the same | the same | the same | the same |
 | pages (webview) | WKWebView | not yet | not yet | WebKitGTK (loaded with `dlopen`; [docs](docs/linux-pages.md)) | WebView2 |
@@ -351,15 +355,24 @@ Android's SDK and NDK). On a Mac, `zig build -Dtarget=x86_64-linux-gnu` or
 
 The CPU renderer matches the Metal one pixel for pixel, and a test compares
 them; others compare the OpenGL renderer with the CPU one, with OpenGL 3.3
-and with OpenGL ES 3, in a context without a window. `NANOUI_RENDERER=cpu` draws on the CPU where OpenGL is. `zig build test -Dportable=true` runs the Linux and Windows text and
+and with OpenGL ES 3, in a context without a window. On Linux, OpenGL is
+required for native UI: when GTK cannot create a context, the window closes
+instead of falling back to the CPU. `NANOUI_RENDERER=cpu` asks for the CPU
+renderer explicitly (a shaped window uses it too, to read its shape).
+`zig build test -Dportable=true` runs the Linux and Windows text and
 renderer on a Mac. Linux is also tested in a container
 (`tools/linux.Dockerfile`: GTK 3 and 4, WebKitGTK, fonts, a virtual display).
 
 On Linux nanoui loads GTK 4 when it's installed and GTK 3 otherwise;
 `NANOUI_GTK=3` asks for GTK 3. Both work the same: GTK 4's event
 controllers, draw function, clipboard and dialogs stand in for GTK 3's
-event signals and waiting calls (`src/linux/surface_gtk4.zig`). On Windows,
-frames reach the screen through a Direct3D 11 device (hardware, else WARP)
+event signals and waiting calls (`src/linux/surface_gtk4.zig`). A window
+made with `layer_shell` is not a window among windows but a Wayland layer
+surface — a panel, a bar or a launcher, in a layer above (or below) them,
+placed by its anchors — through gtk4-layer-shell, installed separately,
+which nanoui loads ahead of GTK 4 so the library's libwayland shim is the
+one the symbol lookups find (`Options.layer_shell`, `src/linux/gtk.zig`).
+On Windows, frames reach the screen through a Direct3D 11 device (hardware, else WARP)
 and a flip-sequential swap chain, so resizing stays smooth and content
 stays anchored (`src/windows/d3d.zig`).
 
@@ -388,11 +401,13 @@ another needs its own way to close (no swipe down). A finger is the
 pointer: it presses and drags, and scrolls what it moves up or down over,
 flinging as iOS's scroll views do. Two fingers pinch: their spread and
 movement come to the view as `input.zoom` and `input.pan` (a trackpad's
-pinch does on the Mac). A hardware keyboard's keys and shortcuts work as on
-the Mac, and a focused text field brings up the software keyboard. Views
-are laid out inside the safe area, clear of the status bar, the home
-indicator and the keyboard; a window made with `.full_bleed = true` spans
-the screen and keeps its content clear itself with `ui.div(c).safeArea()`.
+pinch does on the Mac). Holding on text selects its word, with handles, the
+loupe and the edit menu. A hardware keyboard's keys and shortcuts work as on
+the Mac, held keys repeat, and a focused text field brings up the software
+keyboard. Views are laid out inside the safe area, clear of the status bar,
+the home indicator and the keyboard; a window made with `.full_bleed = true`
+spans the screen and keeps its content clear itself with
+`ui.div(c).safeArea()`.
 
 ```sh
 zig build $(sh tools/ios/zig-lib.sh) -Dtarget=aarch64-ios-simulator               # zig-out/ios/Counter.app, Gallery.app
@@ -413,27 +428,14 @@ folder again out of links to it, with that one line fixed, and prints the
 `--zig-lib` flag that uses it (nothing, once Zig is fixed), which goes
 first after `zig build`.
 
-`-Dtarget=aarch64-ios` builds for devices: sign the app with your team
-(Xcode, or `codesign` and a provisioning profile) and install it with
-`xcrun devicectl`. Zig compiles a device's program and Apple's linker
-(`xcrun clang`) links it: an iPhone refuses a program Zig 0.17.0 links,
-before it runs and without a crash report. An app bundles itself in its
-own build.zig:
+Devices, signing, app icons, extensions and iOS versions are in
+[docs/ios.md](docs/ios.md).
 
-```zig
-const bundle = @import("nanoui").ios.app(b, exe, .{ .name = "Notes", .id = "com.example.notes" });
-```
+Windows show pages too, in WKWebView, with the same typed IPC as the Mac's.
+WebKit loads with the first page, so an app without one doesn't pay for it.
 
-An app that makes its own bundle takes its program from
-`ios.executable(b, exe)`.
-
-Zig 0.17 makes iOS 18 the lowest an app runs on unless the target names
-one, and the app's Info.plist follows it. nanoui runs on iOS 15 and
-later: `-Dtarget=aarch64-ios.15.0` (or `aarch64-ios.15.0-simulator`)
-reaches those devices.
-
-Not on iOS yet: pages, the selection's handles and loupe, keys repeating
-while held, or iPad multiwindow.
+On an iPad, an app built with `.multiple_windows` can have several windows
+beside each other ([docs/ios.md](docs/ios.md#ipad-windows)).
 
 ### Android
 
@@ -463,56 +465,52 @@ What you need, an app's build.zig, and what isn't there yet:
 
 ## Apps
 
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <a href="https://github.com/justrach/nanoterm"><img src="docs/images/nanoterm-light.png" alt="nanoterm: an agent's answer with a native visual"></a>
-      <p><a href="https://github.com/justrach/nanoterm"><strong>nanoterm</strong></a>: a terminal of blocks, in the manner of Warp, with a coding agent (graff or Claude Code) over ACP. It has native visuals, a ⌘P launcher, and SSH sessions where the agent works on the remote host.</p>
-    </td>
-    <td width="50%" valign="top">
-      <a href="https://github.com/justrach/nanomon"><img src="docs/images/nanomon-dark.png" alt="nanomon: the overview with graff's suggestions"></a>
-      <p><a href="https://github.com/justrach/nanomon"><strong>nanomon</strong></a>: an activity monitor in Codegraff colors, with cell graphs of CPU, memory, GPU, disk and network. You can quit several processes at once, and a graff bubble suggests what to quit.</p>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <a href="https://github.com/justrach/nanostudio"><img src="docs/images/nanostudio-dark.png" alt="nanostudio: the editor with a zoom on the timeline"></a>
-      <p><a href="https://github.com/justrach/nanostudio"><strong>nanostudio</strong></a>: a screen recorder and editor. It records a display or a window with its sound, then zooms where you clicked. You can trim, speed up and dress the take, and export it. Every frame, preview and export alike, is a nanoui view.</p>
-    </td>
-    <td width="50%" valign="top">
-      <a href="https://github.com/justrach/nanofly"><img src="docs/images/nanofly.png" alt="nanofly: Singapore to San Francisco over the Pacific, with the weather's radar, and the flight's card in a sheet of glass" width="300"></a>
-      <p><a href="https://github.com/justrach/nanofly"><strong>nanofly</strong></a>: flights, live, on a map, for iPhone (and the Mac), after Flighty. It finds a flight's route, follows it from open ADS-B data, and says when it lands by each airport's clock, with the weather there. Its map, drawn by <code>ui.canvas</code>, has the night's side, the weather's radar and the planes around; you can pinch it, and its card is a sheet of Liquid Glass you drag between three heights.</p>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <a href="https://github.com/gstohl/nanomail"><img src="docs/images/nanomail-dark.png" alt="nanomail: a message with links and a picture, shared mailboxes in the sidebar"></a>
-      <p><a href="https://github.com/gstohl/nanomail"><strong>nanomail</strong></a>: a JMAP mail client for macOS and iOS. It shows rich mail with links and pictures, loading pictures from the web only when you ask. New mail arrives by push, and mailboxes others share with you appear with what you may do in them. It signs in with a password, a token, or OAuth in the browser.</p>
-    </td>
-    <td width="50%" valign="top">
-      <a href="https://github.com/justrach/nanolight"><img src="docs/images/nanolight.jpg" alt="Nanolight: its panel has found Safari from &quot;saf&quot;"></a>
-      <p><a href="https://github.com/justrach/nanolight"><strong>nanolight</strong></a>: a launcher for the Mac, Windows and Linux. It finds apps as you type (initials and typos too), does math, and completes Google searches inline, showing the results in its own panel. It runs Raycast extensions and script commands, and asks Grok or searches X a row away.</p>
-    </td>
-  </tr>
-</table>
+### [nanoterm](https://github.com/justrach/nanoterm) & [nanomon](https://github.com/justrach/nanomon)
 
-Download them for macOS:
-[nanoterm](https://github.com/justrach/nanoterm/releases/latest/download/nanoterm-macos-arm64.dmg) ·
-[nanomon](https://github.com/justrach/nanomon/releases/latest/download/nanomon-macos-arm64.dmg) ·
-[nanostudio](https://github.com/justrach/nanostudio/releases/latest/download/nanostudio-macos-arm64.dmg) ·
-[nanolight](https://github.com/justrach/nanolight/releases/latest/download/nanolight-macos-arm64.dmg).
-nanomail builds from source for now (`zig build`; its README has iOS).
+<p align="center">
+  <a href="https://github.com/justrach/nanoterm"><img src="docs/images/nanoterm-light.png" width="48%" alt="nanoterm: an agent's answer with a native visual"></a>
+  <a href="https://github.com/justrach/nanomon"><img src="docs/images/nanomon-dark.png" width="48%" alt="nanomon: the overview with graff's suggestions"></a>
+</p>
 
-They live in `apps/` as submodules, and each also builds on its own, fetching
-nanoui pinned by commit. To build one against the nanoui next to it, with
-your changes, use `--fork`: `cd apps/nanomon && zig build run --fork=../..`.
+- **[nanoterm](https://github.com/justrach/nanoterm):** a terminal of blocks, in the manner of Warp, with a coding agent (graff or Claude Code) over ACP. It has native visuals, a ⌘P launcher, and SSH sessions where the agent works on the remote host.
+- **[nanomon](https://github.com/justrach/nanomon):** an activity monitor in Codegraff colors, with cell graphs of CPU, memory, GPU, disk and network. You can quit several processes at once, and a graff bubble suggests what to quit.
+
+### [nanostudio](https://github.com/justrach/nanostudio) & [nanofly](https://github.com/justrach/nanofly)
+
+<p align="center">
+  <a href="https://github.com/justrach/nanostudio"><img src="docs/images/nanostudio-dark.png" width="58%" alt="nanostudio: the editor with a zoom on the timeline"></a>
+  <a href="https://github.com/justrach/nanofly"><img src="docs/images/nanofly.png" width="32%" alt="nanofly: Singapore to San Francisco over the Pacific, with the weather's radar, and the flight's card in a sheet of glass"></a>
+</p>
+
+- **[nanostudio](https://github.com/justrach/nanostudio):** a screen recorder and editor. It records a display or a window with its sound, then zooms where you clicked. You can trim, speed up and dress the take, and export it. Every frame, preview and export alike, is a nanoui view.
+- **[nanofly](https://github.com/justrach/nanofly):** flights, live, on a map, for iPhone (and the Mac), after Flighty. It finds a flight's route, follows it from open ADS-B data, and says when it lands by each airport's clock, with the weather there. Its map, drawn by `ui.canvas`, has the night's side, the weather's radar and the planes around; you can pinch it, and its card is a sheet of Liquid Glass you drag between three heights.
+
+### [nanomail](https://github.com/gstohl/nanomail) & [nanolight](https://github.com/justrach/nanolight)
+
+<p align="center">
+  <a href="https://github.com/gstohl/nanomail"><img src="docs/images/nanomail-dark.png" width="48%" alt="nanomail: a message with links and a picture, shared mailboxes in the sidebar"></a>
+  <a href="https://github.com/justrach/nanolight"><img src="docs/images/nanolight.jpg" width="48%" alt="Nanolight: its panel has found Safari from 'saf'"></a>
+</p>
+
+- **[nanomail](https://github.com/gstohl/nanomail):** a JMAP mail client for macOS and iOS. It shows rich mail with links and pictures, loading pictures from the web only when you ask. New mail arrives by push, and mailboxes others share with you appear with what you may do in them. It signs in with a password, a token, or OAuth in the browser.
+- **[nanolight](https://github.com/justrach/nanolight):** a launcher for the Mac, Windows and Linux. It finds apps as you type (initials and typos too), does math, and completes Google searches inline, showing the results in its own panel. It runs Raycast extensions and script commands, and asks Grok or searches X a row away.
+
+### [nanodocs](https://github.com/justrach/nanodocs), [nanobrowser](apps/nanobrowser) & [nanocua](apps/nanocua)
+
+<p align="center">
+  <a href="https://github.com/justrach/nanodocs"><img src="docs/images/nanodocs-light.png" width="48%" alt="nanodocs in Paper mode: rendering nanoui's README natively on the GPU with Liquid Glass capsules"></a>
+  <a href="https://github.com/justrach/nanodocs"><img src="docs/images/nanodocs-dark.png" width="48%" alt="nanodocs in Dark mode: rendering an agent HTML report from .nanoui/shelf/ with the Discord .env inspector open"></a>
+</p>
+
+- **[nanodocs](https://github.com/justrach/nanodocs):** a native GPU Markdown (`.md`) and HTML (`.html`) studio and agent artifact shelf (`.nanoui/shelf/`), with Liquid Glass capsules, warm paper and obsidian palettes, 120 Hz transaction-synced live resize, and a `.env` Discord server inspector.
+- **[nanobrowser](apps/nanobrowser):** a web browser on nanoui with an engine of its own in Zig — no WebKit, no Blink, no Gecko, and no C (WHATWG HTML, CSS cascade, block/flex/grid/table layout, display list, and bytecode JS VM).
+- **[nanocua](apps/nanocua):** lets coding agents see and use apps on your Mac in the background through the accessibility tree and an MCP server, with a native nanoui control panel and stop switch (**⌃⌥⌘.**).
+
+Download them for macOS: [nanoterm](https://github.com/justrach/nanoterm/releases/latest/download/nanoterm-macos-arm64.dmg) · [nanomon](https://github.com/justrach/nanomon/releases/latest/download/nanomon-macos-arm64.dmg) · [nanostudio](https://github.com/justrach/nanostudio/releases/latest/download/nanostudio-macos-arm64.dmg) · [nanolight](https://github.com/justrach/nanolight/releases/latest/download/nanolight-macos-arm64.dmg). nanomail and nanodocs build from source (`zig build`). They live in `apps/` as submodules; use `--fork=../..` to build one against a local checkout.
 
 ## Performance
 
-Performance is measured headless with [`hillclimb/`](hillclimb/README.md):
-the same scenes rendered through each framework's own frames and offscreen
-Metal renderer, on an Apple M3 Ultra. The figures are medians per frame in
-milliseconds; lower is better.
+Performance is measured headless with [`hillclimb/`](hillclimb/README.md): the same scenes rendered through each framework's own frames and offscreen Metal renderer on an Apple M3 Ultra (medians per frame in ms; lower is better).
 
 | scene | frame CPU nanoui | frame CPU mygo | GPU nanoui | GPU mygo |
 |---|---:|---:|---:|---:|
@@ -522,57 +520,41 @@ milliseconds; lower is better.
 | list (100 000-row virtual list) | 0.060 | 0.367 | 0.046 | 0.045 |
 | dashboard (12 cards) | 0.015 | 0.087 | 0.098 | 0.295 |
 
-Release binaries are about 0.7 MB for nanoui and 11.8 MB for mygo. IPC (5000
-sequential calls from the page to native code) took 493 ms with nanoui and
-528 ms with mygo.
+Release binaries are about 0.7 MB for nanoui and 11.8 MB for mygo. IPC (5000 sequential calls from the page to native code) took 493 ms with nanoui and 528 ms with mygo.
 
 ### Build times
 
-A counter app each, from empty build caches, on the same M3 Ultra
-(`sh tools/buildperf.sh` measures it again: mygo's
-`examples/counter-native` with Go 1.27.1, nanoui's from `nui start` with
-Zig 0.17.0; network fetches aren't timed):
+A counter app each, from empty build caches, on the same M3 Ultra (`sh tools/buildperf.sh` measures it again: mygo's `examples/counter-native` with Go 1.27.1, nanoui's from `nui start` with Zig 0.17.0; network fetches aren't timed):
 
 | | mygo | nanoui |
 |---|---:|---:|
 | cold build | 4.4 s | 6.3 s (a second app, Zig's global cache warm: 4.8 s) |
 | rebuild, nothing changed | 0.28 s | 0.12 s |
-| rebuild after a one-line edit | 0.55 s | 2.2 s |
+| rebuild after a one-line edit | 0.55 s | 0.56 s |
 | build cache on disk | 182 MB | 97 MB |
 | program | 14 MB | 4 MB Debug, 0.7 MB ReleaseFast (11 s), 0.4 MB ReleaseSmall (6.7 s) |
 
-Zig compiles the app and nanoui as one unit, so an edit rebuilds the
-whole of it where Go rebuilds one package: that's where mygo is faster.
-Cold builds are close, nothing-changed rebuilds faster, and the disk a
-project costs is about half.
+`build.zig` compiles nanoui's non-generic runtime (`src/rt.zig`: renderer, text shaping, layout, paint, platform backend) once into `libnanoui-rt.a`, so an edit in the app only recompiles the tiny app root and relinks in ~0.56 s.
 
 ## Development
 
 ```sh
 zig build lines                                                       # the 600-line limit, enforced
 zig build test-bin -Dtarget=aarch64-linux-gnu --prefix zig-out/linux  # Linux tests, for the container
+cd lean-proofs && lake build && lake exe nanoui-spec-report           # Lean 4 formal proofs (lifecycle, resize, scroll, build split)
 cd hillclimb && zig build run -- --label "change"                     # benchmarks against mygo and history
 sh tools/version.sh 0.2.1                                             # set the version for a release
 ```
 
-To release, set the version, commit, and push its tag (`git tag v0.2.1 &&
-git push origin v0.2.1`). The release workflow checks that the tag matches
-`build.zig.zon`, runs the tests, and opens the GitHub release.
+To release, set the version, commit, and push its tag (`git tag v0.2.1 && git push origin v0.2.1`). The release workflow checks that the tag matches `build.zig.zon`, runs the tests, and opens the GitHub release. Rules for working here, by hand or with an agent, are in [AGENTS.md](AGENTS.md).
 
-Rules for working here, by hand or with an agent, are in
-[AGENTS.md](AGENTS.md).
-
-nanoui is a subset of what full frameworks offer. Pages work on macOS, Windows
-and Linux so far, accessibility is only on iOS and macOS's built-in controls,
-there are no notifications, channels or plugins yet, and bundling is only for
-iOS and Android. Apps update themselves from GitHub releases on macOS, even
-restarting unseen (`nanoui.Updater`). Bound methods run on the main thread.
+nanoui is a subset of what full frameworks offer. Pages work on macOS, Windows and Linux so far, accessibility is only on iOS and macOS's built-in controls, there are no notifications, channels or plugins yet, and bundling is only for iOS and Android. Apps update themselves from GitHub releases on macOS, even restarting unseen (`nanoui.Updater`). Bound methods run on the main thread.
 
 ## License
 
 nanoui is licensed under the [MIT License](LICENSE). Material from mygo (MIT),
 GPUI (Apache 2.0), gpui-motion (MIT) and GPUI Kit (Apache 2.0) keeps its own
-notices; see [third-party notices](THIRD_PARTY_NOTICES.md).
+notices; see [third-party notices](THIRD_PARTY_NOTICES.md). `apps/nanocua` keeps CodeGraff's license, not MIT.
 
 ## Credits
 
@@ -597,4 +579,4 @@ nanoui stands on the shoulders of these projects:
   That covers interruptible targets, presence, keyframes, stagger, layout
   animation, its exact springs and its easing curves.
 - **[GPUI Kit](https://github.com/longbridge/gpui-component)** by [Longbridge](https://github.com/longbridge): `nanoui.kit` follows its components, their variants and their names.
-<p align="center"><sub>Built in Zig 0.17 · <a href="AGENTS.md">AGENTS.md</a> · <a href="hillclimb/README.md">benchmarks</a> · <a href="LICENSE">MIT</a> · <a href="THIRD_PARTY_NOTICES.md">third-party notices</a></sub></p>
+<p align="center"><sub>Built in Zig 0.17 · <a href="https://discord.gg/EmTpv7rmTA">Discord</a> · <a href="AGENTS.md">AGENTS.md</a> · <a href="hillclimb/README.md">benchmarks</a> · <a href="LICENSE">MIT</a> · <a href="THIRD_PARTY_NOTICES.md">third-party notices</a></sub></p>

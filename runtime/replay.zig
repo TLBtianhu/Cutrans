@@ -1,7 +1,7 @@
 const std = @import("std");
 const vne = @import("vne");
 const RuntimeContext = @import("context.zig").Context;
-const command = @import("command.zig");
+const command = @import("vne").command;
 const document_commands = @import("document_commands.zig");
 
 pub const Report = vne.abi.ReplayReport;
@@ -50,7 +50,7 @@ fn taskHash(ctx: *const RuntimeContext) u64 {
 
 pub fn run(ctx: *RuntimeContext, log: *const vne.replay.Log) !Report {
     if (ctx.history.count != 0 or ctx.tasks.count != 0) return error.ReplayRequiresFreshSession;
-    if (ctx.document.nodeIdHighWater() != @import("documents.zig").Document.initDefault().nodeIdHighWater()) return error.ReplayRequiresFreshSession;
+    if (ctx.document.nodeIdHighWater() != @import("vne").documents.Document.initDefault().nodeIdHighWater()) return error.ReplayRequiresFreshSession;
     ctx.clock = .{ .manual = .{} };
     for (log.events[0..log.count]) |*event| {
         try ctx.clock.advanceTo(event.time_ns);

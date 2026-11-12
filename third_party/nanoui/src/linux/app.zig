@@ -20,6 +20,8 @@ pub const Options = struct {
     ctx: ?*anyopaque = null,
     on_open_urls: ?*const fn (ctx: ?*anyopaque, urls: []const []const u8) void = null,
     on_reopen: ?*const fn (ctx: ?*anyopaque) void = null,
+    /// A menu bar app with no Dock icon, on the Mac.
+    activation: enum { regular, accessory } = .regular,
     dock_menu: ?[]const menu_mod.MenuItem = null,
     on_terminate: ?*const fn (ctx: ?*anyopaque) void = null,
     on_continue_activity: ?*const fn (ctx: ?*anyopaque, url: []const u8) void = null,
@@ -54,7 +56,30 @@ pub const App = struct {
     /// `NANOUI_RENDERER=cpu`: draw native UI on the CPU even where OpenGL is.
     cpu_only: bool = false,
 
-    pub fn create(init: std.process.Init, options: Options) !*App {
+    pub fn create(init: anytype, options: Options) !*App {
+        if (@TypeOf(init) == std.process.Init.Minimal) {
+            if (@import("../rt.zig").enabled) {
+                const Ext = struct {
+                    extern fn nanoui_rt_app_create_minimal(min_ptr: *const std.process.Init.Minimal, opts_ptr: *const Options, out: **App) callconv(.c) u8;
+                };
+                var out: *App = undefined;
+                if (Ext.nanoui_rt_app_create_minimal(&init, &options, &out) != 0) return error.AppInitFailed;
+                return out;
+            }
+            return @import("../rt.zig").createFromMinimal(init, options);
+        }
+        if (@import("../rt.zig").enabled) {
+            const Ext = struct {
+                extern fn nanoui_rt_app_create(init_ptr: *const std.process.Init, opts_ptr: *const Options, out: **App) callconv(.c) u8;
+            };
+            var out: *App = undefined;
+            if (Ext.nanoui_rt_app_create(&init, &options, &out) != 0) return error.AppInitFailed;
+            return out;
+        }
+        return createImpl(init, options);
+    }
+
+    pub fn createImpl(init: std.process.Init, options: Options) !*App {
         const gpa = init.gpa;
         const self = try gpa.create(App);
         errdefer gpa.destroy(self);
@@ -78,6 +103,15 @@ pub const App = struct {
         return self;
     }
 
+    /// Says that a window of this app will ask for a layer surface
+    /// (`Options.layer_shell`), before GTK is loaded. gtk4-layer-shell has to
+    /// be in the global scope ahead of libwayland for its shim to work, and
+    /// that order only exists while GTK is being loaded. `Window.create`
+    /// says it itself; an app that starts GTK on its own says it here first.
+    pub fn wantLayerShell() void {
+        @import("gtk.zig").wants_layer_shell = true;
+    }
+
     /// Brings GTK up, once, for a window that is about to be made. A page
     /// needs the GTK its WebKitGTK is built for, so it has the first say.
     pub fn startGtk(self: *App, for_page: bool) !void {
@@ -90,6 +124,16 @@ pub const App = struct {
     }
 
     pub fn destroy(self: *App) void {
+        if (@import("../rt.zig").enabled) {
+            const Ext = struct {
+                extern fn nanoui_rt_app_destroy(app: *App) callconv(.c) void;
+            };
+            return Ext.nanoui_rt_app_destroy(self);
+        }
+        self.destroyImpl();
+    }
+
+    pub fn destroyImpl(self: *App) void {
         while (self.windows.items.len > 0) self.windows.items[self.windows.items.len - 1].close();
         self.windows.deinit(self.gpa);
         if (self.main_menu) |m| m.destroy();
@@ -171,6 +215,18 @@ pub const App = struct {
     }
 
     pub fn newWindow(self: *App, options: window_mod.Options) !*Window {
+        if (@import("../rt.zig").enabled) {
+            const Ext = struct {
+                extern fn nanoui_rt_app_new_window(app: *App, opts_ptr: *const window_mod.Options, out: **Window) callconv(.c) u8;
+            };
+            var out: *Window = undefined;
+            if (Ext.nanoui_rt_app_new_window(self, &options, &out) != 0) return error.WindowInitFailed;
+            return out;
+        }
+        return self.newWindowImpl(options);
+    }
+
+    pub fn newWindowImpl(self: *App, options: window_mod.Options) !*Window {
         const w = try Window.create(self, options);
         errdefer w.close();
         try self.windows.append(self.gpa, w);
@@ -186,6 +242,17 @@ pub const App = struct {
     }
 
     pub fn run(self: *App) !void {
+        if (@import("../rt.zig").enabled) {
+            const Ext = struct {
+                extern fn nanoui_rt_app_run(app: *App) callconv(.c) u8;
+            };
+            if (Ext.nanoui_rt_app_run(self) != 0) return error.AppRunFailed;
+            return;
+        }
+        return self.runImpl();
+    }
+
+    pub fn runImpl(self: *App) !void {
         if (self.flags.generate_dir) |dir| return self.writeClient(dir);
         if (self.flags.snapshot) |path| return dev.snapshot(self, path);
         try self.startGtk(false);
@@ -223,10 +290,14 @@ pub const App = struct {
     }
 
     /// From any thread: calls `func(ctx)` on the main thread soon (GLib's
-    /// main context takes sources from any thread).
-    pub fn onMain(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
-        after(0, ctx, func);
+    /// main context takes sources from any thread). False when it never
+    /// will (no GTK, no memory for the source), as on Windows.
+    pub fn onMain(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) bool {
+        return schedule(0, ctx, func);
     }
+
+    /// iPad's New Window (`ios/scenes.zig`): the system doesn't ask for windows here.
+    pub fn onNewWindow(_: *App, _: *anyopaque, _: *const fn (ctx: *anyopaque, app: *App) void) void {}
 
     /// Files the system asks the app to open: on macOS only; here a file
     /// is named on the command line, which the app reads itself.
@@ -234,6 +305,10 @@ pub const App = struct {
 
     /// Calls `func(ctx)` on the main thread after `ms` milliseconds.
     pub fn after(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
+        _ = schedule(ms, ctx, func);
+    }
+
+    fn schedule(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) bool {
         const Timer = struct {
             ctx: ?*anyopaque,
             func: *const fn (?*anyopaque) callconv(.c) void,
@@ -244,10 +319,14 @@ pub const App = struct {
                 return 0;
             }
         };
-        if (!gtk.load()) return;
-        const t = std.heap.c_allocator.create(Timer) catch return;
+        if (!gtk.load()) return false;
+        const t = std.heap.c_allocator.create(Timer) catch return false;
         t.* = .{ .ctx = ctx, .func = func };
-        _ = gtk.api.g_timeout_add(@intCast(ms), Timer.fire, t);
+        if (gtk.api.g_timeout_add(@intCast(ms), Timer.fire, t) == 0) {
+            std.heap.c_allocator.destroy(t);
+            return false;
+        }
+        return true;
     }
 
     pub fn setMenu(self: *App, template: []const menu_mod.MenuItem) !void {

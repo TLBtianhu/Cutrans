@@ -9,7 +9,7 @@ test "recording rejects equal content with a different node allocator baseline" 
     ctx.init(std.testing.allocator);
     defer ctx.deinit();
     ctx.document.observeNodeId(9);
-    try std.testing.expectEqual(@import("documents.zig").Document.initDefault().fingerprint(), ctx.document.fingerprint());
+    try std.testing.expectEqual(@import("vne").documents.Document.initDefault().fingerprint(), ctx.document.fingerprint());
     var recorder: Recorder = .{};
     defer recorder.deinit();
     try std.testing.expectError(error.InputRecordingRequiresFreshSession, recorder.start(&ctx, "session://input/blocked.cvr"));
@@ -37,8 +37,8 @@ pub const Recorder = struct {
             .system => {},
         }
         if (ctx.devices.input.last_serial != 0 or ctx.history.count != 0 or ctx.tasks.count != 0 or
-            ctx.document.fingerprint() != @import("documents.zig").Document.initDefault().fingerprint() or
-            ctx.document.nodeIdHighWater() != @import("documents.zig").Document.initDefault().nodeIdHighWater()) return error.InputRecordingRequiresFreshSession;
+            ctx.document.fingerprint() != @import("vne").documents.Document.initDefault().fingerprint() or
+            ctx.document.nodeIdHighWater() != @import("vne").documents.Document.initDefault().nodeIdHighWater()) return error.InputRecordingRequiresFreshSession;
         const parsed = try vne.uri.parse(uri);
         const resolved = try ctx.mounts.resolveAlloc(ctx.allocator, parsed);
         errdefer ctx.allocator.free(resolved.path);
@@ -210,7 +210,7 @@ test "action recording reconciles command results history and document identity"
     var log = try input_replay.parse(std.testing.allocator, bytes);
     defer log.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 5), log.actions.len);
-    try std.testing.expectEqual(@as(?@import("command.zig").Code, .invalid_state), log.actions[0].result);
+    try std.testing.expectEqual(@as(?@import("vne").command.Code, .invalid_state), log.actions[0].result);
     try std.testing.expect(log.actions[4].suppressed);
     var replayed: RuntimeContext = undefined;
     try testContext(&replayed, resource, data);

@@ -5,7 +5,7 @@
 //! 这里不读取 .ccmd;文本资源只能由已启动的 CLI 应用解析。
 
 const std = @import("std");
-const command = @import("command.zig");
+const command = @import("vne").command;
 
 pub const Phase = enum { configure, session, all };
 pub const Report = struct { files: usize = 0, commands: usize = 0 };

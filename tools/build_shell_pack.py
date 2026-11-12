@@ -1,4 +1,4 @@
-"""Generate a Shell Pack manifest consumed by the VM Runtime."""
+"""Generate a legacy Shell Pack or builtin NanoUI payload manifest."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def main() -> None:
         "licenses/Windows-Terminal-MIT.txt",
     ]
     manifest = {
-        "format": "cutrans-shell-pack/1",
+        "format": "cutrans-payload/1" if args.entry == "builtin" else "cutrans-shell-pack/1",
         "id": args.id,
         "version": version(),
         "abi": args.abi,

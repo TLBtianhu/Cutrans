@@ -6,6 +6,7 @@ const w = @import("win32.zig");
 const dev = @import("../dev.zig");
 const window_mod = @import("window.zig");
 const menu_mod = @import("../menu_accel.zig");
+const tray_mod = @import("tray.zig");
 const ui = @import("../ui/ui.zig");
 const tsgen = @import("../tsgen.zig");
 const ipc = @import("../ipc.zig").ipc(window_mod.Window, App);
@@ -19,33 +20,27 @@ const coinit_apartment_threaded: u32 = 0x2;
 
 pub const Options = struct {
     name: []const u8 = "nanoui",
-    quit_on_last_window_closed: bool = true,
-    /// Attach the app's JSON value store and read its previous values. False
-    /// keeps `kv.standard()` in memory without touching another install's data.
+    /// Keep `nanoui.kv` between launches. A Cutrans Shell sets false so a
+    /// different NanoUI app's data directory is never read.
     kv: bool = true,
-    /// Where the font scan's result is cached, and the folder that cache
-    /// describes (the app's, kept for the process's life). Both null: the
-    /// scan runs every start, as before.
-    font_cache: ?[]const u8 = null,
-    fonts_dir: ?[]const u8 = null,
-    /// Draw frames straight to the window with GDI instead of making a D3D11
-    /// device and flip swap chain. No vsync and no GPU uploads, but a D3D
-    /// device costs tens of megabytes (driver DLLs and threads) that a small
-    /// utility window may not want to pay. `--mem-probe --gdi` measures both.
-    gdi: bool = false,
-    // The macOS app's hooks, accepted here and not called yet.
+    quit_on_last_window_closed: bool = true,
     ctx: ?*anyopaque = null,
+    /// URLs the app was launched with (a registered scheme's handler is
+    /// started as `app.exe "scheme://…"`), delivered once the loop runs.
     on_open_urls: ?*const fn (ctx: ?*anyopaque, urls: []const []const u8) void = null,
+    // The macOS app's other hooks, accepted here and not called yet.
     on_reopen: ?*const fn (ctx: ?*anyopaque) void = null,
     dock_menu: ?[]const menu_mod.MenuItem = null,
     on_terminate: ?*const fn (ctx: ?*anyopaque) void = null,
     on_continue_activity: ?*const fn (ctx: ?*anyopaque, url: []const u8) void = null,
     on_active: ?*const fn (ctx: ?*anyopaque, active: bool) void = null,
+    /// The Mac's (a menu bar app with no Dock icon); every Windows app is
+    /// `.regular`, and one with `skip_taskbar` windows and a tray is the
+    /// accessory kind.
+    activation: Activation = .regular,
 };
 
-fn wantsPersistentKv(gui: bool, options: Options, hidden: bool) bool {
-    return gui and options.kv and !hidden;
-}
+pub const Activation = enum { regular, accessory };
 
 const Timer = struct { id: usize, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void };
 var timers: [64]?Timer = @splat(null);
@@ -73,6 +68,8 @@ pub const App = struct {
     options: Options,
     windows: std.ArrayList(*Window) = .empty,
     main_menu: ?*menu_mod.Menu = null,
+    /// Icons in the notification area (`newTray`), destroyed with the app.
+    trays: std.ArrayList(*tray_mod.Tray) = .empty,
     flags: dev.Flags = .{},
     /// `%LOCALAPPDATA%`, where WebView2 keeps its profile (`page_webview2.zig`).
     local_appdata: ?[]const u8 = null,
@@ -86,12 +83,41 @@ pub const App = struct {
     webview_profile: ?[]const u8 = null,
     /// Whether this thread holds a COM apartment (`CoInitializeEx`).
     com: bool = false,
+    /// The command line's URLs (`urlArgs`), for `on_open_urls`; delivered
+    /// once, when the loop first runs.
+    launch_urls: [][]u8 = &.{},
+    /// Where `frame_autosave` keeps window frames: the app's data folder
+    /// when null (`window_place.zig`). Tests point it at a temporary one.
+    placement_dir: ?[]const u8 = null,
     gui: bool = false,
     running: bool = false,
     stopping: bool = false,
     debug: bool = false,
 
-    pub fn create(init: std.process.Init, options: Options) !*App {
+    pub fn create(init: anytype, options: Options) !*App {
+        if (@TypeOf(init) == std.process.Init.Minimal) {
+            if (@import("../rt.zig").enabled) {
+                const Ext = struct {
+                    extern fn nanoui_rt_app_create_minimal(min_ptr: *const std.process.Init.Minimal, opts_ptr: *const Options, out: **App) callconv(.c) u8;
+                };
+                var out: *App = undefined;
+                if (Ext.nanoui_rt_app_create_minimal(&init, &options, &out) != 0) return error.AppInitFailed;
+                return out;
+            }
+            return @import("../rt.zig").createFromMinimal(init, options);
+        }
+        if (@import("../rt.zig").enabled) {
+            const Ext = struct {
+                extern fn nanoui_rt_app_create(init_ptr: *const std.process.Init, opts_ptr: *const Options, out: **App) callconv(.c) u8;
+            };
+            var out: *App = undefined;
+            if (Ext.nanoui_rt_app_create(&init, &options, &out) != 0) return error.AppInitFailed;
+            return out;
+        }
+        return createImpl(init, options);
+    }
+
+    pub fn createImpl(init: std.process.Init, options: Options) !*App {
         const gpa = init.gpa;
         const self = try gpa.create(App);
         errdefer gpa.destroy(self);
@@ -100,17 +126,13 @@ pub const App = struct {
         if (init.environ_map.get("LOCALAPPDATA")) |v| self.local_appdata = v;
         if (init.environ_map.get("NANOUI_WEBVIEW_PROFILE")) |v| self.webview_profile = v;
         self.gui = flags.snapshot == null and flags.generate_dir == null;
-
+        self.launch_urls = urlArgs(gpa, try init.minimal.args.toSlice(init.arena.allocator())) catch &.{};
         // A GUI app (pages, dialogs, the shell) calls COM: the main thread's
         // apartment is made here, before any window asks for it.
         if (self.gui) {
             _ = CoInitializeEx(null, coinit_apartment_threaded);
             self.com = true;
         }
-
-        // Cold-start marks on stderr, for apps that do not turn them on
-        // themselves (`ui.trace.enabled`); off by default.
-        if (init.environ_map.get("NANOUI_TRACE") != null) ui.trace.enabled = true;
         // Pixels, not stretched bitmaps: nanoui draws at the monitor's DPI,
         // per monitor — a window carried to another screen hears about it
         // (`WM_DPICHANGED`) and rescales. Before Windows 10 1607 there is no
@@ -120,9 +142,10 @@ pub const App = struct {
         }
         // Where other threads' calls for the main thread arrive (`onMain`).
         @import("fdwatch.zig").prepare() catch {};
-        // `kv.standard()` is persistent only when the app opts in and never
-        // for headless runs (tests, snapshots).
-        if (wantsPersistentKv(self.gui, options, flags.hidden)) if (@import("desktop.zig").path(gpa, .data, options.name)) |dir| {
+        // `kv.standard()` kept between launches, in the app's data
+        // directory; never for headless runs (tests, snapshots), and only
+        // when the app opted in.
+        if (options.kv) if (self.gui and !flags.hidden) if (@import("desktop.zig").path(gpa, .data, options.name)) |dir| {
             defer gpa.free(dir);
             @import("../basics/kv.zig").attach(init.io, dir);
         } else |_| {};
@@ -130,9 +153,21 @@ pub const App = struct {
     }
 
     pub fn destroy(self: *App) void {
+        if (@import("../rt.zig").enabled) {
+            const Ext = struct {
+                extern fn nanoui_rt_app_destroy(app: *App) callconv(.c) void;
+            };
+            return Ext.nanoui_rt_app_destroy(self);
+        }
+        self.destroyImpl();
+    }
+
+    pub fn destroyImpl(self: *App) void {
         // No timer outlives the app: one that fired after this would call its
         // function with a context that is already gone.
         clearTimers();
+        while (self.trays.items.len > 0) self.trays.items[self.trays.items.len - 1].destroy();
+        self.trays.deinit(self.gpa);
         // `destroyNow`, not `close`: `close` only posts the request and waits for
         // a message loop that is not running any more, so this drained nothing
         // and spun forever.
@@ -142,6 +177,8 @@ pub const App = struct {
         self.services.deinit(self.gpa);
         self.events.deinit(self.gpa);
         if (self.client_js) |js| self.gpa.free(js);
+        for (self.launch_urls) |u| self.gpa.free(u);
+        if (self.launch_urls.len > 0) self.gpa.free(self.launch_urls);
         if (self.com) CoUninitialize();
         self.gpa.destroy(self);
     }
@@ -164,6 +201,18 @@ pub const App = struct {
     }
 
     pub fn newWindow(self: *App, options: window_mod.Options) !*Window {
+        if (@import("../rt.zig").enabled) {
+            const Ext = struct {
+                extern fn nanoui_rt_app_new_window(app: *App, opts_ptr: *const window_mod.Options, out: **Window) callconv(.c) u8;
+            };
+            var out: *Window = undefined;
+            if (Ext.nanoui_rt_app_new_window(self, &options, &out) != 0) return error.WindowInitFailed;
+            return out;
+        }
+        return self.newWindowImpl(options);
+    }
+
+    pub fn newWindowImpl(self: *App, options: window_mod.Options) !*Window {
         const win = try Window.create(self, options);
         errdefer win.close();
         try self.windows.append(self.gpa, win);
@@ -238,6 +287,17 @@ pub const App = struct {
     }
 
     pub fn run(self: *App) !void {
+        if (@import("../rt.zig").enabled) {
+            const Ext = struct {
+                extern fn nanoui_rt_app_run(app: *App) callconv(.c) u8;
+            };
+            if (Ext.nanoui_rt_app_run(self) != 0) return error.AppRunFailed;
+            return;
+        }
+        return self.runImpl();
+    }
+
+    pub fn runImpl(self: *App) !void {
         if (self.flags.generate_dir) |dir| return self.writeClient(dir);
         if (self.flags.snapshot) |path| return dev.snapshot(self, path);
         // `--nanoui-eval`: the page is driven, not watched. The loop runs
@@ -248,6 +308,7 @@ pub const App = struct {
         }
         if (self.stopping or !self.gui) return;
         self.running = true;
+        self.deliverLaunchUrls();
         var msg: w.MSG = undefined;
         // A page's WebView2 is asked for now, with a loop to hear its answer.
         for (self.windows.items) |win| if (win.page) |p| p.start();
@@ -268,6 +329,7 @@ pub const App = struct {
     /// arrive, and nothing is drawn to the screen.
     pub fn runSeconds(self: *App, seconds: f64) !void {
         self.running = true;
+        self.deliverLaunchUrls();
         for (self.windows.items) |win| if (win.page) |p| p.start();
         const clock = @import("../ui/clock.zig");
         const start = clock.now();
@@ -288,19 +350,37 @@ pub const App = struct {
         self.running = false;
     }
 
+    /// The launch's URLs to `on_open_urls`, once.
+    fn deliverLaunchUrls(self: *App) void {
+        if (self.launch_urls.len == 0) return;
+        const f = self.options.on_open_urls orelse return;
+        const urls: []const []const u8 = @ptrCast(self.launch_urls);
+        f(self.options.ctx, urls);
+        for (self.launch_urls) |u| self.gpa.free(u);
+        self.gpa.free(self.launch_urls);
+        self.launch_urls = &.{};
+    }
+
     pub fn quit(self: *App) void {
         if (self.stopping) return;
         self.stopping = true;
         if (self.running) w.PostQuitMessage(0);
     }
 
+    /// iPad's New Window (`ios/scenes.zig`): the system doesn't ask for windows here.
+    pub fn onNewWindow(_: *App, _: *anyopaque, _: *const fn (ctx: *anyopaque, app: *App) void) void {}
+
     /// Files the system asks the app to open: on macOS only; here a file
     /// is named on the command line, which the app reads itself.
     pub fn onOpenFiles(_: *App, _: *anyopaque, _: *const fn (ctx: *anyopaque, paths: []const []const u8) void) void {}
 
-    /// From any thread: calls `func(ctx)` on the main thread soon.
-    pub fn onMain(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
-        _ = @import("fdwatch.zig").post(ctx, func);
+    /// From any thread: calls `func(ctx)` on the main thread soon. False
+    /// when it never will: the message window is not made yet or
+    /// PostMessageW failed (the thread's queue is full), and the call is
+    /// dropped. A caller that keeps a "wake in flight" flag lowers it then,
+    /// or every later wake would wait on one that never comes.
+    pub fn onMain(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) bool {
+        return @import("fdwatch.zig").post(ctx, func);
     }
 
     pub fn after(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
@@ -331,10 +411,29 @@ pub const App = struct {
         return m.item(id);
     }
 
-    pub fn newTray(self: *App, opts: anytype) !noreturn {
-        _ = self;
-        _ = opts;
-        return error.TraysUnsupported;
+    /// Adds an icon to the notification area; it lives until removed with
+    /// `Tray.destroy` or the app ends. Not when the app runs hidden or
+    /// headless (snapshots, scripts, tests).
+    pub fn newTray(self: *App, opts: tray_mod.Options) !*tray_mod.Tray {
+        if (self.flags.hidden or !self.gui) return error.Hidden;
+        try self.trays.ensureUnusedCapacity(self.gpa, 1);
+        const t = try tray_mod.Tray.create(self.gpa, self.options.name, opts);
+        t.owner = .{ .ctx = self, .quit = trayQuit, .forget = trayForget };
+        self.trays.appendAssumeCapacity(t);
+        return t;
+    }
+
+    fn trayQuit(ctx: *anyopaque) void {
+        const self: *App = @ptrCast(@alignCast(ctx));
+        self.quit();
+    }
+
+    fn trayForget(ctx: *anyopaque, t: *tray_mod.Tray) void {
+        const self: *App = @ptrCast(@alignCast(ctx));
+        for (self.trays.items, 0..) |item, i| if (item == t) {
+            _ = self.trays.orderedRemove(i);
+            return;
+        };
     }
 
     pub fn accelerator(self: *App, sc: ui.Shortcut) bool {
@@ -362,9 +461,38 @@ pub const App = struct {
     }
 };
 
-test "persistent values require an explicit opt-in and a visible GUI" {
-    try std.testing.expect(wantsPersistentKv(true, .{}, false));
-    try std.testing.expect(!wantsPersistentKv(true, .{ .kv = false }, false));
-    try std.testing.expect(!wantsPersistentKv(true, .{}, true));
-    try std.testing.expect(!wantsPersistentKv(false, .{}, false));
+/// The arguments that are URLs (`scheme://…`, the scheme two or more
+/// letters, digits, `+`, `-` or `.` from a letter: never a drive's `C:\`),
+/// copied: what a protocol handler's launch carries, for `on_open_urls`.
+/// The program's own name and `--` flags are not.
+pub fn urlArgs(gpa: std.mem.Allocator, args: []const [:0]const u8) ![][]u8 {
+    var out: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (out.items) |u| gpa.free(u);
+        out.deinit(gpa);
+    }
+    for (args, 0..) |arg, i| {
+        if (i == 0 or !isUrl(arg)) continue;
+        try out.append(gpa, try gpa.dupe(u8, arg));
+    }
+    return out.toOwnedSlice(gpa);
+}
+
+pub fn isUrl(arg: []const u8) bool {
+    const at = std.mem.indexOf(u8, arg, "://") orelse return false;
+    if (at < 2 or !std.ascii.isAlphabetic(arg[0])) return false;
+    for (arg[0..at]) |ch| if (!(std.ascii.isAlphanumeric(ch) or ch == '+' or ch == '-' or ch == '.')) return false;
+    return arg.len > at + 3;
+}
+
+test "a launch's URLs are its scheme:// arguments" {
+    const gpa = std.testing.allocator;
+    const urls = try urlArgs(gpa, &.{ "C:\\app.exe", "alchemist://open?project=1", "--nanoui-hidden", "C:\\x\\y.mov", "https://example.com/a", "x://", "1a://b" });
+    defer {
+        for (urls) |u| gpa.free(u);
+        gpa.free(urls);
+    }
+    try std.testing.expectEqual(@as(usize, 2), urls.len);
+    try std.testing.expectEqualStrings("alchemist://open?project=1", urls[0]);
+    try std.testing.expectEqualStrings("https://example.com/a", urls[1]);
 }

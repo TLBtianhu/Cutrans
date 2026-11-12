@@ -4,7 +4,7 @@
 //! has 只查询当前工作帧是否已物化且与文档指纹一致,不把“声明上存在”误当成“字节已就绪”。
 
 const std = @import("std");
-const documents = @import("documents.zig");
+const documents = @import("vne").documents;
 const render = @import("render.zig");
 
 pub const Stream = struct {

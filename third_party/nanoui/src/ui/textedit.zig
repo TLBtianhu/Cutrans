@@ -117,7 +117,10 @@ pub fn handleUndoShortcuts(c: *Context, b: *tf.TextBuffer, e: *EditState, r: *tf
 pub fn commitUndo(c: *Context, b: *tf.TextBuffer, e: *EditState, r: *const tf.Result, took_text: bool, took_key: bool) void {
     if (c.paste_op) e.undo.group = false;
     var typing = !c.paste_op and !took_text and !took_key and c.input.key == null and (c.input.chars.len > 0 or c.input.ops.len > 0);
-    for (c.input.ops) |op| typing = typing and op == .insert;
+    // An input method's composition is typing too: each update of the
+    // marked text joins the run, so undo after 日本 does not bring back
+    // the kana it was composed from (NSTextView: one step).
+    for (c.input.ops) |op| typing = typing and (op == .insert or op == .set_marked or op == .unmark);
     e.undo.commit(b.text(), e.caret, r.changed, typing);
 }
 
@@ -125,12 +128,15 @@ pub fn updateCaretBlink(c: *Context, was_focused: bool, changed: bool, moved: bo
     if (!was_focused or changed or moved or c.input.pressed) c.caret_moved_at = c.time;
 }
 
+pub fn caretShown(c: *Context, e: *EditState, focused: bool, edited: bool, solid: bool) bool {
+    const f = e.blink.step(c.time, focused and c.input.window_active and c.window_focused, e.caret != e.anchor, solid or e.marked != null, edited);
+    if (f.next) |wait| c.frameIn(wait);
+    return f.visible;
+}
+
 pub fn caretVisible(c: *Context) bool {
-    if (!c.window_focused) return false;
-    const elapsed = @max(0.0, c.time - c.caret_moved_at);
-    const rem: f32 = 0.5 - @mod(@as(f32, @floatCast(elapsed)), 0.5);
-    c.frameIn(@max(0.01, rem));
-    return elapsed < 0.5 or @mod(elapsed, 1.0) < 0.5;
+    const e = c.edits.getPtr(c.focus) orelse return false;
+    return caretShown(c, e, true, c.caret_moved_at == c.time, false);
 }
 
 pub fn rehome(c: *Context, buffer: *tf.TextBuffer, id: u64) void {
@@ -146,6 +152,7 @@ pub fn editState(c: *Context, id: u64, buffer: *tf.TextBuffer) ?*EditState {
     const entry = c.edits.getOrPut(c.gpa, id) catch return null;
     if (!entry.found_existing) entry.value_ptr.* = .{ .caret = len, .anchor = len };
     const e = entry.value_ptr;
+    if (c.focus != id or !c.input.window_active or !c.window_focused or e.caret != e.anchor) e.blink = .{};
     if (buffer.want_caret) |at| {
         e.caret = at;
         e.anchor = at;

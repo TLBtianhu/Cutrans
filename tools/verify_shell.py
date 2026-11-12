@@ -26,17 +26,23 @@ def submitted_times(text: str) -> set[int]:
     return {int(match.group(3)) for match in SHELL_FRAME.finditer(text)}
 
 
-def start_and_verify(bootstrap: Path, document: Path, data: Path, mode: str, cleanup: bool = True, playback_frames: int | None = None, assets_demo: bool = False, settle_seconds: float = 0.0, cwd: Path | None = None) -> None:
+def start_and_verify(bootstrap: Path, document: Path, data: Path, mode: str, cleanup: bool = True, playback_frames: int | None = None, assets_demo: bool = False, settle_seconds: float = 0.0, cwd: Path | None = None, manage_host: bool | None = None) -> None:
     gui_cwd = ensure_owned_data(cwd if cwd is not None else data.parent / f"{data.name} gui-cwd")
     legacy_ini = check_root(gui_cwd / "imgui.ini")
     ini_before = (legacy_ini.read_bytes(), legacy_ini.stat().st_mtime_ns) if legacy_ini.exists() else None
-    host_console = bootstrap if bootstrap.name == "cutrans_vm.exe" else None
+    if manage_host is None:
+        manage_host = bootstrap.name.casefold() in {"cutrans_vm.exe", "cutrans.exe"}
+    host_console = bootstrap if manage_host else None
     if host_console is not None:
         started = automation_process.run(command_args([str(host_console), "start", f"--mode={mode}", f"--data={data}"]), cwd=gui_cwd, capture_output=True, text=True)
         if started.returncode:
             raise RuntimeError("could not start the Host used by the desktop probe: " + started.stdout + started.stderr)
-        bootstrap = host_console.parent / "cutrans_shell.exe"
-    command = [str(bootstrap), f"--mode={mode}", f"--data={data}", "--open", str(document)]
+        if host_console.name.casefold() != "cutrans.exe":
+            bootstrap = host_console.parent / "cutrans_shell.exe"
+    command = [str(bootstrap)]
+    if bootstrap.name.casefold() == "cutrans.exe":
+        command.append("--role=shell")
+    command.extend([f"--mode={mode}", f"--data={data}", "--open", str(document)])
     if playback_frames is not None:
         command.append(f"--playback={playback_frames}")
     if assets_demo:
@@ -55,6 +61,7 @@ def start_and_verify(bootstrap: Path, document: Path, data: Path, mode: str, cle
     ready = False
     editor = False
     frame = False
+    environment_ready = False
     playback_ready = playback_frames is None
     assets_ready = not assets_demo
     ready_at: float | None = None
@@ -66,24 +73,25 @@ def start_and_verify(bootstrap: Path, document: Path, data: Path, mode: str, cle
             text = "".join(lines)
             frame_times = submitted_times(text)
             ready = ready or "Cutrans VM 桌面就绪" in text
+            environment_ready = environment_ready or "CUTRANS_ENVIRONMENT_SESSION_OK" in text
             editor = editor or "app.open editor" in text
             frame = frame or bool(frame_times)
             assets_ready = assets_ready or "CUTRANS_SHELL_ASSETS_OK selected=1 preview=91x69 inserted=1 source_uri=1 snapshot=1 library=1" in text
             if playback_frames is not None:
                 playback_ready = playback_ready or playback_frames - 1 in frame_times
-            if ready and editor and frame and playback_ready and assets_ready:
+            if ready and environment_ready and editor and frame and playback_ready and assets_ready:
                 if ready_at is None:
                     ready_at = time.time()
                 if time.time() - ready_at >= settle_seconds:
                     settled = True
                     break
             natural_exit = process.poll()
-            if natural_exit is not None and not (ready and editor and frame and playback_ready and assets_ready):
+            if natural_exit is not None and not (ready and environment_ready and editor and frame and playback_ready and assets_ready):
                 thread.join(timeout=2)
                 natural_exit = None
                 continue
             time.sleep(0.05)
-        if not (ready and editor and frame and playback_ready and assets_ready and settled):
+        if not (ready and environment_ready and editor and frame and playback_ready and assets_ready and settled):
             raise RuntimeError("NanoUI desktop or projected frame submission did not become ready: " + "".join(lines))
     finally:
         if process.poll() is None:

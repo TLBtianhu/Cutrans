@@ -1,6 +1,6 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
-const runtime = @import("runtime");
+const vm_client = @import("vm_client");
 const shell = @import("shell");
 
 const ui = nanoui.ui;
@@ -25,7 +25,7 @@ const JobsPage = struct {
 };
 
 pub const State = struct {
-    ctx: *runtime.context.Context,
+    ctx: *vm_client.Context,
     input: ui.TextBuffer = .{},
     history: [16]?[]u8 = @splat(null),
     history_count: usize = 0,
@@ -33,7 +33,7 @@ pub const State = struct {
     jobs_error: ?anyerror = null,
     after: u64 = 0,
 
-    pub fn init(ctx: *runtime.context.Context) State {
+    pub fn init(ctx: *vm_client.Context) State {
         return .{ .ctx = ctx };
     }
 

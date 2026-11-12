@@ -4,7 +4,7 @@ const std = @import("std");
 const workspace = @import("vne").workspace;
 const abi = @import("vne").abi;
 const Context = @import("context.zig").Context;
-const command = @import("command.zig");
+const command = @import("vne").command;
 
 const Receipts = @import("request_receipts.zig").Book(workspace.Outcome, workspace.receipt_capacity);
 
@@ -138,6 +138,36 @@ test "receipts precede stale checks and old sequences never execute twice" {
     try std.testing.expectEqual(@as(usize, 3), ctx.document.count);
     request.expected.epoch_lo += 1;
     try std.testing.expectEqual(workspace.Status.wrong_epoch, (try registry.submit(ctx, epoch, &request, "history.undo", null)).status);
+}
+
+test "managed doc.save replays without saving twice or advancing revision" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    const resource = try std.fs.path.join(std.testing.allocator, &.{ root, "resources" });
+    defer std.testing.allocator.free(resource);
+    const data = try std.fs.path.join(std.testing.allocator, &.{ root, "data" });
+    defer std.testing.allocator.free(data);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, resource);
+    const ctx = try std.testing.allocator.create(Context);
+    defer std.testing.allocator.destroy(ctx);
+    ctx.init(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.io = std.testing.io;
+    ctx.paths = try @import("paths.zig").Paths.fromDirs(std.testing.allocator, .development, resource, data);
+    defer ctx.paths.deinit(std.testing.allocator);
+    @import("document_commands.zig").register(ctx);
+    var registry = Registry.init(std.testing.allocator);
+    defer registry.deinit();
+    const epoch = [2]u64{ 1, 2 };
+    var request = workspace.Request{ .client_hi = 3, .client_lo = 4, .sequence = 1, .expected = Registry.stamp(ctx, epoch), .name = .{} };
+    const first = try registry.submit(ctx, epoch, &request, "doc.save", null);
+    try std.testing.expectEqual(abi.Status.ok, first.status);
+    const revision = ctx.document_revision;
+    const replayed = try registry.submit(ctx, epoch, &request, "doc.save", null);
+    try std.testing.expectEqual(@as(u32, @backingInt(workspace.Disposition.replayed)), replayed.disposition);
+    try std.testing.expectEqual(revision, ctx.document_revision);
 }
 
 test "client admission fails before mutation and retained high waters are not evicted" {

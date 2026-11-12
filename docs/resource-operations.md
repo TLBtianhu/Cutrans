@@ -2,7 +2,7 @@
 
 资源库是素材声明的真源，Station是当前活动对象，文档与Job持有指定内容版本。改变外部文件位置或库的当前版本，不应重写已有作品或活动对象。
 
-当前Resource API v3由ABI10的ShellApi getter、Runtime导出和Host RPC 26～30提供（v1最初在ABI9引入，v2增加通用登记，v3增加工作正文）。`shell/library_client.zig`保存完整候选、未确认请求与目录投影，并支持普通文件登记；完整候选恢复向导仍未接入，没有自动同步、版本列表或垃圾回收。
+当前Resource API v4由ABI10的ShellApi getter、Runtime导出和Host RPC 26～32提供（v1最初在ABI9引入，v2增加通用登记，v3增加工作正文，v4增加本机只读浏览）。`shell/library_client.zig`保存完整候选、未确认请求与目录投影，并支持普通文件登记；完整候选恢复向导仍未接入，没有自动同步、版本列表或垃圾回收。
 
 ## 两种明确意图
 
@@ -19,7 +19,7 @@
 
 `probe`返回无状态proof，绑定库stamp、目标ID、模式、原head、候选hash、规范路径hash、长度与真实文件身份。probe不写授权、版本、观察记录或Station。proof只是前置条件，不是插件权限凭证；`submit`重新读取同一路径，并核对完整proof后才可能提交。
 
-提交带独立client身份与连续sequence。VM先查询回执，再检查当前版本和候选文件；原候选已经删除或后续head已变化，仍可重放原已知结果。同token不同参数拒绝；最近64回执之外的旧token过期后拒绝重做。客户端预算4096，执行前预留回执存储。文档与资源共享发号／回执机制，业务版本、授权与操作策略仍各自独立。
+提交带独立client身份与连续sequence。VM先查询回执，再检查当前版本和候选文件；原候选已经删除或后续head已变化，仍可重放原已知结果。同token不同参数拒绝；最近64回执之外的旧token过期后拒绝重做，持久客户端高水位保证已被环形覆盖的sequence不会再次执行。客户端预算4096，执行前预留回执存储。文档与资源共享发号／回执机制，业务版本、授权与操作策略仍各自独立。
 
 非零传输结果表示未知，Shell保留原proof、路径、token和sequence，只重试原请求。已知结果与随后投影刷新失败分别记录；旧epoch或回执过期不能证明旧操作从未执行，需核对现状，再由新的明确意图发起请求。未知请求不自动换token、改stamp或重选路径。
 
@@ -64,12 +64,25 @@ v3在原Resource API尾部增加`work_snapshot`与`work_submit`，主Shell ABI�
 
 工作操作包括`create`、`save_draft`、`commit`和`discard`。`create`建立owned资源及工作revision 1；`save_draft`只保存草稿，不推进工作revision，也不替换正式Station输入；`commit`核对draft token和`base_revision`后推进一次工作revision并清除对应草稿元数据；`discard`只丢弃指定token。草稿token全局单调且不复用。过期base可以保存以保护输入，但提交时必须是当前工作revision，冲突保留草稿而不覆盖。
 
-正文分别发布到`library/work/<id>/<revision>.bin`和`library/drafts/<id>/<token>.bin`。完整字节写入并同步后才原子提交Catalog v3；目录、草稿元数据与成功回执在同一Catalog提交生效。未引用候选不猜作垃圾自动删除，也不宣称文件与目录构成跨文件原子事务。当前正文和草稿单份上限16MiB，NanoUI文本编辑另限1MiB有效UTF-8且无NUL；其它二进制仍按素材处理。
+正文分别发布到`library/work/<id>/<revision>.bin`和`library/drafts/<id>/<token>.bin`。完整字节写入并同步后才原子提交Catalog v4；目录、草稿元数据、成功回执与客户端高水位在同一Catalog提交生效。未引用候选不猜作垃圾自动删除，也不宣称文件与目录构成跨文件原子事务。当前正文和草稿单份上限16MiB，NanoUI文本编辑另限1MiB有效UTF-8且无NUL；其它二进制仍按素材处理。
 
 `work_snapshot`优先返回已持久草稿，否则返回当前工作正文，携工作revision、编辑base、draft token、来源类型和双向hash。两次读取必须属于同一快照，否则拒绝拼接。`readVersion`与Document／History／Job继续按原hash读取已采用固定版本，工作头前进不会重写旧输入；未被采用且未留存的旧工作字节不承诺永久恢复。
 
-成功工作回执与Catalog一起持久化，最近64条且不做静默淘汰，达到上限明确拒绝。原client＋sequence先查回执再检查当前revision，跨Runtime重放不重复创建或提交；失败与拒绝回执只保留当前Runtime的既有有界请求簿语义，不宣称所有错误均跨重启恢复。Shell编辑队列仍不自动跨重启重放，重新打开先恢复已确认草稿，不盲目提交。
+成功工作回执与Catalog一起持久化，最近64条为环形覆盖，达到上限不再拒绝新工作；每个client的已确认高水位另行持久化，旧sequence按过期拒绝而不是重新执行。原client＋sequence先查回执再检查当前revision，跨Runtime重放不重复创建或提交；失败与拒绝回执只保留当前Runtime的既有有界请求簿语义，不宣称所有错误均跨重启恢复。Shell编辑队列仍不自动跨重启重放，重新打开先恢复已确认草稿，不盲目提交。
 
 NanoUI资源库可新建工作正文，自动保存草稿，Ctrl+S／“保存正文”提交。编辑同时只发一个待确认请求，后续输入留在UI；旧快照不覆盖脏正文，导航和窗口关闭会阻止丢失未确认输入。输入预检、组合输入事务和有界撤销在项目适配层实现，未修改NanoUI vendor。真实中文输入法、系统剪贴板、可见窗口手感和完整安装验收仍需单独进行。
 
 实际入口为`tools/verify_work_documents.py`（真实DLL／Host、旧导出、丢回复、冷恢复）和`tools/verify_nanoui_library.py`（真实前端草稿／提交／关闭保护）。普通工作文件与作品固定版本已分离，但共享异步求值、完整FrameLease、通用目录、完整恢复向导、跨文件通用事务和垃圾回收仍未完成。
+
+
+## 本机文件只读浏览与显式登记（Resource API v4）
+
+v4尾部增加`source_browse`和`source_read`，主Shell ABI仍为10。新增RPC31浏览当前目录一层，RPC32读取明确的普通文件；旧RPC25的固定版本Source读取不变。路径与游标采用无指针线格式，Runtime负责路径、来源边界、文件身份和完整字节检查。
+
+`runtime/local_sources.zig`的目录结果只是临时观察，不是ResourceId、固定内容版本或永久授权。当前目录最多4096项、每页128项，目录优先并按名称排序；成员重解析点跳过，不递归建立资源。浏览不创建Catalog、授权、留存版本或Station lease。当前游标只服务本次排序结果，目录变化后不承诺定位同一对象，也不是稳定Catalog游标。
+
+文件临时读取上限16MiB，文本预览限1MiB有效UTF-8且无NUL，UI最多显示前64KiB；PNG使用现有图片通路。未知格式可明确不支持预览但仍登记。预览不冒充固定版本，目录整体收纳和完整目录独立化未实现。
+
+NanoUI“本机文件”页面支持目录选择、绝对路径、嵌套进入、返回、刷新、分页和临时预览。只有用户显式“收录到资源库”才走既有`register_file`，默认只读引用；登记成功但预览未建立时保留资源，不回滚登记。插入文档仍由既有资源库动作单独执行。
+
+实际验证入口为`tools/verify_local_sources.py`，覆盖真实DLL／Host的浏览、读取、隔离根、冷恢复和原生无头页面，详见[本机文件实施记录](memory/2026-11-08-local-file-sources.md)。同步owner枚举、流式超大目录、目录成员持久收纳关系、工程目录完整性、统一预算和完整原生互通仍需后续切片。

@@ -17,11 +17,15 @@ const ui = @import("ui.zig");
 const Window = @import("../window.zig").Window;
 const a11y = @import("a11y.zig");
 const events = @import("surface_events.zig");
+const wake = @import("surface_wake.zig");
+const thread_wake = @import("surface_thread_wake.zig");
+const pointer = @import("surface_pointer.zig");
 const frame_log_mod = @import("frame_log.zig");
 pub const FrameLog = frame_log_mod.FrameLog;
 pub const KeysReleased = struct { ctx: ?*anyopaque, func: *const fn (ctx: ?*anyopaque, s: *Surface) void };
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 const pacing = @import("pacing.zig");
+const link_pace = @import("surface_pacing.zig");
 pub const Surface = struct {
     gpa: std.mem.Allocator,
     window: *Window,
@@ -42,11 +46,16 @@ pub const Surface = struct {
     last_frame_time: f64 = 0,
     start_time: f64 = 0,
     tick_scheduled: bool = false,
+    /// Another thread asked for a frame and the main queue hasn't run it.
+    wake_pending: std.atomic.Value(bool) = .init(false),
     /// Paces animation frames at the display's refresh (CADisplayLink).
     display_link: ?objc.Object = null,
     /// The pace asked of the link: 0 is the display's, -1 unset.
     link_fps: f32 = -1,
     max_fps: f32 = 60,
+    /// The most frames a second the app wants (0: the screen's maximum):
+    /// a 120 Hz budget on a 240 Hz screen, or a battery saver.
+    fps_cap: f32 = 0,
     link_duration: f64 = 0,
     last_present_target: f64 = 0,
     paced: bool = false,
@@ -54,24 +63,32 @@ pub const Surface = struct {
     full_pending: bool = false,
     retained_ready: bool = false,
     frame_in_due: f64 = 0,
-    wake: @import("surface_wake.zig").Wake = .{},
+    wake: wake.Wake = .{},
     pending_sync: bool = false,
     /// A frame was wanted while the window was hidden: run it once visible.
     pending: bool = false,
     dead: bool = false,
+    /// `destroy` ran after the app's run loop stopped: queued ticks and
+    /// wakes will never fire, so the surface must not wait for them.
+    force_destroy: bool = false,
     torn_down: bool = false,
     /// The window is being resized: only its size changes draw (each when
     /// the layer is displayed); the link waits, and what else asks for a
     /// frame (output, an animation) gets the resize's next one.
     resizing: bool = false,
     cursor: ctx_mod.Cursor = .arrow,
+    custom_cursor: ?*anyopaque = null,
+    /// The app's GPU passes before each frame's (`gpu.BeforeEncode`).
+    before_encode: ?@import("gpu.zig").BeforeEncode = null,
     cursor_dirty: bool = false,
     theme_override: ?Theme = null,
     cached_theme: Theme = Theme.light,
     reduce_motion: bool = false,
     is_visible: bool = false,
     released: bool = false,
-    in_live_resize: bool = false,
+    /// When the live resize last changed the size: the link stays awake a
+    /// little after it (`resizeStepping`), not for the whole drag.
+    resize_step_at: f64 = 0,
     geometry_changed: bool = false,
     transparent: bool = false,
     after_frame_ctx: ?*anyopaque = null,
@@ -119,7 +136,12 @@ pub const Surface = struct {
             // Before anything can run a frame: setContentView: resizes the view.
             .start_time = cf.CACurrentMediaTime(),
         };
+        // Before anything can queue a tick or a wake, which find it by id.
+        wake.register(self);
+        errdefer wake.unregister(self);
+        if (text.portable and !window.app.flags.hidden) self.text.enablePersistence(window.app.options.name);
         self.ctx = .init(gpa, &self.text);
+        self.ctx.waker = .{ .ctx = self, .wake = thread_wake.fromContext };
         // Pictures go straight to the GPU before any view callback can run a frame.
         self.text.images.sink = .{ .ctx = &self.renderer, .upload = @import("metal.zig").Renderer.uploadImage };
         self.refreshAppearance();
@@ -143,21 +165,12 @@ pub const Surface = struct {
             for (events.drag_types) |t| objc.msg(void, arr, "addObject:", .{objc.nsString(t)});
             objc.msg(void, nsview, "registerForDraggedTypes:", .{arr});
         }
-        {
-            const link = objc.msg(objc.Object, objc.alloc("CAMetalDisplayLink"), "initWithMetalLayer:", .{self.renderer.layer});
-            objc.msg(void, link, "setDelegate:", .{nsview});
-            objc.msg(void, link, "setPaused:", .{objc.YES});
-            const loop = objc.msg(objc.Object, objc.class("NSRunLoop"), "mainRunLoop", .{});
-            objc.msg(void, link, "addToRunLoop:forMode:", .{ loop, NSRunLoopCommonModes });
-            self.display_link = link;
-        }
+        self.startLink();
         {
             const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
             self.reduce_motion = objc.msg(objc.BOOL, ws, "accessibilityDisplayShouldReduceMotion", .{});
             const center = objc.msg(objc.Object, ws, "notificationCenter", .{});
-            objc.msg(void, center, "addObserver:selector:name:object:", .{
-                nsview, objc.sel("accessibilityChanged:"), objc.nsString("NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification"), @as(?objc.Object, null),
-            });
+            objc.msg(void, center, "addObserver:selector:name:object:", .{ nsview, objc.sel("accessibilityChanged:"), objc.nsString("NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification"), @as(?objc.Object, null) });
         }
         self.refreshAppearance();
         self.is_visible = objc.msg(objc.BOOL, window.nswindow, "isVisible", .{}) and (objc.msg(objc.NSUInteger, window.nswindow, "occlusionState", .{}) & 2 != 0);
@@ -165,9 +178,21 @@ pub const Surface = struct {
         self.frame();
         return self;
     }
+    pub const startLink = link_pace.startLink;
+    pub const stopLink = link_pace.stopLink;
+
     pub fn destroy(self: *Surface) void {
         self.dead = true;
+        self.ctx.changed = false;
+        self.force_destroy = !self.window.app.running;
         if (!self.in_frame) self.finishDestroy();
+    }
+    pub fn token(self: *const Surface) ?*anyopaque {
+        return wake.token(self);
+    }
+    pub fn alive(tok: ?*anyopaque) bool {
+        const s = wake.find(tok) orelse return false;
+        return !s.dead;
     }
     pub fn finishDestroy(self: *Surface) void {
         if (!self.torn_down) {
@@ -183,7 +208,7 @@ pub const Surface = struct {
             }
             if (self.tracking) |t| objc.release(t);
             a11y.clearCache(self);
-            objc.release(self.nsview);
+            objc.autorelease(self.nsview);
             self.instances.deinit(self.gpa);
             self.pasted.deinit(self.gpa);
             if (self.tip) |t| self.gpa.free(t);
@@ -195,8 +220,14 @@ pub const Surface = struct {
             self.pacing_log.close();
             if (self.frame_log) |*fl| fl.deinit();
         }
-        if (!self.tick_scheduled and self.wake.pending == 0) self.gpa.destroy(self);
+        // Else the last tick or wake to run frees it. Closed while the app
+        // ran, it may stop before they do: `App.destroy` frees it then
+        // (`wake.sweep`).
+        if (self.force_destroy or (!self.tick_scheduled and !self.wake_pending.load(.acquire) and self.wake.pending == 0)) wake.free(self);
     }
+
+    /// From any thread: a frame at the display's next refresh (`surface_thread_wake.zig`).
+    pub const requestFrameFromAnyThread = thread_wake.request;
 
     fn finishFrame(self: *Surface) void {
         self.in_frame = false;
@@ -221,16 +252,9 @@ pub const Surface = struct {
         self.updateMaxFps();
     }
 
-    fn updateMaxFps(self: *Surface) void {
-        const screen = objc.msg(?objc.Object, self.window.nswindow, "screen", .{});
-        const fps: f32 = if (screen) |sc| @floatFromInt(@max(60, objc.msg(objc.NSInteger, sc, "maximumFramesPerSecond", .{}))) else 60;
-        if (fps != self.max_fps) {
-            self.max_fps = fps;
-            const cur = self.link_fps;
-            self.link_fps = -1;
-            if (cur >= 0) self.setRate(if (cur == 0) null else 1 / cur);
-        }
-    }
+    const updateMaxFps = link_pace.updateMaxFps;
+    /// Caps the display link's pace at `fps` (0 lifts the cap).
+    pub const setFpsCap = link_pace.setFpsCap;
 
     pub fn refreshAppearance(self: *Surface) void {
         const appearance = objc.msg(objc.Object, self.nsview, "effectiveAppearance", .{});
@@ -300,21 +324,25 @@ pub const Surface = struct {
         self.frame_kind = kind;
         self.ctx.transparent_root = self.transparent;
         a11y.beforeFrame(self);
-        c.window_focused = if (vis) self.window.isFocused() else true;
+        c.input.window_active = self.window.isFocused();
+        c.window_focused = c.input.window_active;
         self.pacing_log.note(now);
         // What scrolling gathered since the last frame, applied at once.
         const dy = self.scroll.take();
-        if (dy != 0 and !c.applyScroll(dy) and c.wants_wheel) c.input.scroll = .{ .y = dy };
+        if (dy != 0 and !c.applyScroll(dy) and (c.wants_wheel or c.wheelAt())) c.input.scroll.y += dy;
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, a11y.themed(self, self.theme()), dt, now - self.start_time);
         if (self.dead) return;
         a11y.afterFrame(self);
         @import("../play.zig").paint(self.gpa, &self.instances);
         self.frame_in_due = if (c.frame_in) |fi| now + @as(f64, fi) else 0;
+        if (c.frame_in == null) self.wake.due = 0;
         const t_af0 = if (self.frame_log != null) cf.CACurrentMediaTime() else 0;
         const native_changed = if (self.after_frame) |af| af(self.after_frame_ctx, self) else false;
         if (self.dead) return;
         const after_frame_ms = if (self.frame_log != null) (cf.CACurrentMediaTime() - t_af0) * 1000 else 0;
-        const sync = native_changed or self.in_live_resize or self.geometry_changed or self.pending_sync;
+        // In the window's transaction only when native views moved with
+        // the frame: a resize alone presents on the link's schedule.
+        const sync = native_changed or self.pending_sync;
         self.geometry_changed = false;
         self.pending_sync = false;
         self.afterFocus();
@@ -358,15 +386,13 @@ pub const Surface = struct {
 
     pub fn updatePacing(self: *Surface, now: f64, hot_changed: bool) void {
         const c = &self.ctx;
-        const elapsed = (now - self.start_time) - c.caret_moved_at;
-        const recent_typing = c.focused_text != null and c.caret_moved_at > 0 and elapsed >= 0 and elapsed < 0.35;
-        const more = c.animating or hot_changed or c.input.down or recent_typing or self.scroll.active(now);
+        const more = self.resizeStepping() or c.animating or hot_changed or c.input.down or self.scroll.active(now);
         if (self.display_link != null) {
             if (more) {
                 self.setRate(null);
                 self.setPaced(true);
             } else if (c.frame_in != null) {
-                @import("surface_wake.zig").at(self, self.frame_in_due); // not a slowed link: see there
+                wake.at(self, self.frame_in_due); // not a slowed link: see there
             } else if (c.time_driven != .none) {
                 self.setRate(if (c.time_driven == .fast) null else 1.0 / 24.0);
                 self.setPaced(true);
@@ -377,6 +403,10 @@ pub const Surface = struct {
             if (self.frame_log) |*fl| fl.last_t = 0;
         }
     }
+
+    pub const resizeStepping = link_pace.resizeStepping;
+    pub const resizeSyncEnabled = link_pace.resizeSyncEnabled;
+    pub const resizeInTransaction = link_pace.resizeInTransaction;
 
     pub fn redrawRetained(self: *Surface, target_in: f64, duration_in: f64) void {
         if (self.in_frame or self.dead) return;
@@ -428,7 +458,10 @@ pub const Surface = struct {
         if (atlas_reset) self.renderer.waitIdle();
         self.renderer.syncImages(&self.text.images);
         self.renderer.textures = c.textures.items;
+        self.renderer.gradients = c.gradients.items;
+        self.renderer.before_encode = self.before_encode;
         const clear = if (self.transparent) types.Color.transparent else c.theme.background;
+        self.renderer.setBackdrop(clear);
         const present_at = if (target_in > 0) target_in else if (self.last_present_target > 0) @max(wall_now, self.last_present_target + dur) else wall_now;
         self.renderer.present_at = present_at;
         self.renderer.time = @floatCast(now - self.start_time);
@@ -446,6 +479,7 @@ pub const Surface = struct {
             presented = self.renderer.drawLogged(self.instances.items, self.atlasTexture(), self.size, clear, null, 0).presented;
         }
         if (presented) self.last_present_target = present_at;
+        if (presented) wake.presented(self);
         return presented;
     }
 
@@ -467,6 +501,7 @@ pub const Surface = struct {
             return;
         }
         if (self.display_link != null and self.visible()) {
+            self.ctx.frame_in = null;
             self.setRate(null);
             self.setPaced(true);
         } else self.scheduleTick();
@@ -500,11 +535,10 @@ pub const Surface = struct {
     }
 
     pub fn setPaced(self: *Surface, on: bool) void {
+        if (on) wake.watch(self);
         if (self.paced == on) return;
         self.paced = on;
-        if (!on) if (self.frame_log) |*fl| {
-            fl.last_t = 0;
-        };
+        if (!on and self.frame_log != null) self.frame_log.?.last_t = 0;
         if (self.display_link) |link| objc.msg(void, link, "setPaused:", .{!on});
     }
 
@@ -526,75 +560,20 @@ pub const Surface = struct {
         }
     }
 
-    pub fn updateCursor(self: *Surface) void {
-        if (self.transparent and self.ctx.inStageHoleAt(self.ctx.input.mouse)) {
-            self.cursor_dirty = true;
-            return;
-        }
-        const want: ctx_mod.Cursor = self.ctx.cursor orelse if (self.ctx.cursor_text) .text else if (self.ctx.cursor_hand) .hand else .arrow;
-        if (want == self.cursor and !self.cursor_dirty) return;
-        self.cursor = want;
-        self.cursor_dirty = false;
-        self.applyCursor();
+    pub const updateCursor = pointer.updateCursor;
+    pub const applyCursor = pointer.applyCursor;
+    const afterFocus = pointer.afterFocus;
+    pub const refreshTip = pointer.refreshTip;
+
+    /// The native view the surface draws into (`nsview`): the parent a
+    /// docked page goes in, as Windows' surface names its HWND.
+    pub fn nativeHandle(self: *Surface) ?*anyopaque {
+        return @ptrCast(self.nsview);
     }
 
-    pub fn applyCursor(self: *Surface) void {
-        const name: [:0]const u8 = switch (self.cursor) {
-            .arrow => "arrowCursor",
-            .hand => "pointingHandCursor",
-            .text => "IBeamCursor",
-            .resize_left_right => "resizeLeftRightCursor",
-            .resize_up_down => "resizeUpDownCursor",
-            .open_hand => "openHandCursor",
-            .closed_hand => "closedHandCursor",
-            .not_allowed => "operationNotAllowedCursor",
-            .crosshair => "crosshairCursor",
-        };
-        objc.msg(void, objc.msg(objc.Object, objc.class("NSCursor"), name, .{}), "set", .{});
-    }
-
-    /// After a frame: a box newly focused takes the keyboard for the view
-    /// (`focusNext` while a page had it), and the hot box's help shows.
-    fn afterFocus(self: *Surface) void {
-        const c = &self.ctx;
-        if (c.focus != 0) {
-            const first = objc.msg(?objc.Object, self.window.nswindow, "firstResponder", .{});
-            if (first == null or first.? != self.nsview) _ = objc.msg(objc.BOOL, self.window.nswindow, "makeFirstResponder:", .{self.nsview});
-        } else if (self.last_focus != 0 and c.focus == 0) {
-            const first = objc.msg(?objc.Object, self.window.nswindow, "firstResponder", .{});
-            if (first != null and first.? == self.nsview and c.selection.hit == null and !c.selection.dragging and c.selection.text.items.len == 0) {
-                if (self.keys_released) |kr| kr.func(kr.ctx, self);
-            }
-        }
-        self.last_focus = c.focus;
-        self.refreshTip();
-    }
-
-    /// Shows the help under the pointer: after a frame, and on a move
-    /// within one box onto a marker with its own.
-    pub fn refreshTip(self: *Surface) void {
-        const tip = self.ctx.hotHelp();
-        const same = if (tip) |t| (if (self.tip) |old| std.mem.eql(u8, t, old) else false) else self.tip == null;
-        if (same) return;
-        if (self.tip) |old| self.gpa.free(old);
-        self.tip = if (tip) |t| self.gpa.dupe(u8, t) catch null else null;
-        objc.msg(void, self.nsview, "setToolTip:", .{if (self.tip) |t| objc.nsString(t) else @as(?objc.Object, null)});
-    }
-
-    fn scheduleTick(self: *Surface) void {
-        if (self.tick_scheduled) return;
-        self.tick_scheduled = true;
-        objc.dispatchAfter(std.time.ns_per_s / 120, self, tick);
-    }
-    fn tick(ptr: ?*anyopaque) callconv(.c) void {
-        const self: *Surface = @ptrCast(@alignCast(ptr));
-        self.tick_scheduled = false;
-        if (self.dead) return self.finishDestroy();
-        self.frame();
-    }
+    const scheduleTick = thread_wake.scheduleTick;
     pub fn toView(self: *Surface, p: objc.CGPoint) types.Point {
         const local = objc.msg(objc.CGPoint, self.nsview, "convertPoint:fromView:", .{ p, @as(?objc.Object, null) });
         return .{ .x = @floatCast(local.x), .y = @floatCast(local.y) };
     }
 };
-extern "c" const NSRunLoopCommonModes: objc.Object;

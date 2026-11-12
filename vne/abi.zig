@@ -1,7 +1,9 @@
 const std = @import("std");
 const launch = @import("launch.zig");
 
-pub const version: u32 = 10;
+pub const version: u32 = 11;
+
+pub const PreviewInfo = @import("preview.zig").Info;
 
 pub const Status = struct {
     pub const ok: i32 = 0;
@@ -230,6 +232,8 @@ pub const ShellApi = extern struct {
     /// Read owned encoded Source bytes without creating a remote Station lease.
     source_read: *const fn (?*anyopaque, ByteSlice, ByteSlice, ?[*]u8, usize, ?*usize) callconv(.c) i32,
     resource_api: *const fn (?*anyopaque, ?*@import("resource_api.zig").Api) callconv(.c) i32,
+    preview_info: *const fn (?*anyopaque, u64, ?*PreviewInfo) callconv(.c) i32,
+    preview_read: *const fn (?*anyopaque, u64, ?[*]u8, usize, ?*usize) callconv(.c) i32,
 
     pub fn isCurrent(self: *const ShellApi) bool {
         return self.struct_size == @sizeOf(ShellApi) and self.abi_version == version;
@@ -261,19 +265,21 @@ test "runtime ABI mode and library identity are explicit" {
     try std.testing.expect(runtimeLibraryName().len > 0);
 }
 
-test "ABI10 asset projection and old Shell tables fail closed" {
+test "ABI11 preview extension and old Shell tables fail closed" {
     try std.testing.expectEqual(@offsetOf(ShellApi, "workspace_api") + @sizeOf(@TypeOf(@as(ShellApi, undefined).workspace_api)), @offsetOf(ShellApi, "source_read"));
     try std.testing.expectEqual(@offsetOf(ShellApi, "source_read") + @sizeOf(@TypeOf(@as(ShellApi, undefined).source_read)), @offsetOf(ShellApi, "resource_api"));
+    try std.testing.expectEqual(@offsetOf(ShellApi, "resource_api") + @sizeOf(@TypeOf(@as(ShellApi, undefined).resource_api)), @offsetOf(ShellApi, "preview_info"));
+    try std.testing.expectEqual(@offsetOf(ShellApi, "preview_info") + @sizeOf(@TypeOf(@as(ShellApi, undefined).preview_info)), @offsetOf(ShellApi, "preview_read"));
     var table: ShellApi = undefined;
     table.struct_size = @sizeOf(ShellApi);
     table.abi_version = version;
     try std.testing.expect(table.isCurrent());
-    table.struct_size = @offsetOf(ShellApi, "source_read");
+    table.struct_size = @offsetOf(ShellApi, "preview_info");
     try std.testing.expect(!table.isCurrent());
-    table.struct_size = @offsetOf(ShellApi, "resource_api");
+    table.struct_size = @offsetOf(ShellApi, "preview_read");
     try std.testing.expect(!table.isCurrent());
     table.struct_size = @sizeOf(ShellApi);
-    table.abi_version = 9;
+    table.abi_version = 10;
     try std.testing.expect(!table.isCurrent());
     table.abi_version = version;
     table.struct_size = @sizeOf(ShellApi) + 1;

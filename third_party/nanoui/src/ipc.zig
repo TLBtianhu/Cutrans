@@ -6,6 +6,22 @@
 //!     pub const ipc = @import("ipc.zig").ipc(Window, App);
 const std = @import("std");
 const tsgen = @import("tsgen.zig");
+const page_mod = @import("page.zig");
+
+/// The scheme, `://` and host of `url`; "" for a URL without them.
+pub fn originOf(url: []const u8) []const u8 {
+    const sep = std.mem.indexOf(u8, url, "://") orelse return "";
+    const rest = url[sep + 3 ..];
+    const end = std.mem.indexOfAny(u8, rest, "/?#") orelse rest.len;
+    return url[0 .. sep + 3 + end];
+}
+
+test "a call's origin is its page's scheme and host" {
+    try std.testing.expectEqualStrings("nanoui://localhost", originOf("nanoui://localhost/code.html?x=1"));
+    try std.testing.expectEqualStrings("https://example.com", originOf("https://example.com"));
+    try std.testing.expectEqualStrings("http://localhost:5173", originOf("http://localhost:5173#top"));
+    try std.testing.expectEqualStrings("", originOf("/index.html"));
+}
 
 pub fn ipc(comptime Window: type, comptime App: type) type {
     return struct {
@@ -15,6 +31,27 @@ pub fn ipc(comptime Window: type, comptime App: type) type {
             /// Freed when the reply is sent: allocate results here.
             arena: std.mem.Allocator,
             window: *Window,
+            /// The page the call came from (the window's own or a docked
+            /// one), as the platform's `*Page`: compare it with a page the
+            /// app made to know who is calling.
+            page: ?*anyopaque = null,
+            /// That page's `PageOptions.label`.
+            label: []const u8 = "",
+            /// The URL of the document that sent the call, as the webview
+            /// reports it with the message (WKWebView's frame request,
+            /// WebView2's message `Source`), so a page that navigated itself
+            /// is seen where it went. Absolute: the app's own assets are on
+            /// `origin` (`nanoui://localhost/code.html`). Only when the
+            /// webview gives none is it the URL the page was last told to
+            /// load, resolved the same way.
+            url: []const u8 = "",
+
+            /// The scheme and host of `url` (`nanoui://localhost`,
+            /// `https://example.com`), without a path: what to check before
+            /// trusting a call that only one of the app's pages may make.
+            pub fn origin(call: *const Call) []const u8 {
+                return originOf(call.url);
+            }
         };
 
         pub const Service = struct {
@@ -81,6 +118,12 @@ pub fn ipc(comptime Window: type, comptime App: type) type {
                     window.sendOwned(msg);
                 }
 
+                /// Sends `payload` to one page (a docked one). Main thread.
+                pub fn emitPage(page: anytype, payload: T) void {
+                    const msg = encode(page.queue.gpa, payload) catch return;
+                    page.sendOwned(msg);
+                }
+
                 /// Sends `payload` to every window's page. Main thread only.
                 pub fn broadcast(app: *App, payload: T) void {
                     const msg = encode(app.gpa, payload) catch return;
@@ -121,8 +164,25 @@ pub fn ipc(comptime Window: type, comptime App: type) type {
             return @intFromFloat(@min(id, 9007199254740992.0));
         }
 
-        /// Handles one message from a page, on the main thread.
+        /// A page its own call closed, freed once the call has returned: as
+        /// its platform frees one (`freeClosed`), or when no flush is left
+        /// to free it (WebKit's flush frees a dead page as it runs).
+        fn freeClosed(page: anytype) void {
+            if (@hasDecl(@TypeOf(page.*), "freeClosed")) return page.freeClosed();
+            if (!page.queue.flush_scheduled) page.queue.gpa.destroy(page);
+        }
+
+        /// Handles one message from the window's page, on the main thread.
         pub fn handleMessage(window: *Window, body: []const u8) void {
+            const page = window.page orelse return;
+            handlePageMessage(window, page, body, "");
+        }
+
+        /// Handles one message from `page`, one of `window`'s (its `page`
+        /// or a docked one), on the main thread. `source` is the URL of the
+        /// document that posted it, as the webview reports it ("" when it
+        /// reports none): what `Call.url` and `Call.origin` say.
+        pub fn handlePageMessage(window: *Window, page: anytype, body: []const u8, source: []const u8) void {
             const app = window.app;
             var arena: std.heap.ArenaAllocator = .init(app.gpa);
             defer arena.deinit();
@@ -131,12 +191,23 @@ pub fn ipc(comptime Window: type, comptime App: type) type {
                 std.log.warn("nanoui: malformed message from page", .{});
                 return;
             };
-            const page = window.page orelse return;
+            // A method may close `window` (freeing it) and its page: only
+            // `page` is used after `callMethod`, and it outlives this call.
+            page.queue.dispatching = true;
+            defer {
+                page.queue.dispatching = false;
+                if (page.queue.dead) freeClosed(page);
+            }
             if (std.mem.eql(u8, env.t, "call")) {
                 var aw: std.Io.Writer.Allocating = .init(a);
                 aw.writer.print("{{\"t\":\"reply\",\"id\":{d},", .{pageId(env.id)}) catch return;
                 const mark = aw.written().len;
-                callMethod(app, window, a, env.m, env.a, &aw.writer) catch |err| {
+                const url = if (source.len > 0)
+                    source
+                else
+                    page_mod.fullUrl(a.alloc(u8, page.queue.current_url.len + page_mod.origin.len + 1) catch return, page.queue.current_url);
+                var call: Call = .{ .arena = a, .window = window, .page = @ptrCast(page), .label = page.queue.options.label, .url = url };
+                callMethod(app, &call, env.m, env.a, &aw.writer) catch |err| {
                     aw.shrinkRetainingCapacity(mark);
                     aw.writer.writeAll("\"ok\":false,\"e\":") catch return;
                     const text = std.fmt.allocPrint(a, "{s}: {s}", .{ env.m, @errorName(err) }) catch return;
@@ -166,12 +237,11 @@ pub fn ipc(comptime Window: type, comptime App: type) type {
             }
         }
 
-        fn callMethod(app: *App, window: *Window, arena: std.mem.Allocator, method: []const u8, args: []const std.json.Value, out: *std.Io.Writer) !void {
+        fn callMethod(app: *App, call: *Call, method: []const u8, args: []const std.json.Value, out: *std.Io.Writer) !void {
             const dot = std.mem.indexOfScalar(u8, method, '.') orelse return error.UnknownMethod;
             const svc = app.services.get(method[0..dot]) orelse return error.UnknownService;
             try out.writeAll("\"ok\":true,\"v\":");
-            var call: Call = .{ .arena = arena, .window = window };
-            try svc.dispatch(svc.ctx, &call, method[dot + 1 ..], args, out);
+            try svc.dispatch(svc.ctx, call, method[dot + 1 ..], args, out);
         }
     };
 }

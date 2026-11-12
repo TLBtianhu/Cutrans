@@ -3,8 +3,8 @@
 //! GUI 与诊断器注册同一份 handler,避免命令语义随入口漂移。
 
 const std = @import("std");
-const command = @import("command.zig");
-const documents = @import("documents.zig");
+const command = @import("vne").command;
+const documents = @import("vne").documents;
 const render = @import("render.zig");
 const image = @import("image.zig");
 const history = @import("history.zig");
@@ -644,6 +644,29 @@ fn cancelTask(c: command.Command, opaque_ptr: *anyopaque) command.Result {
     return .failure(.invalid_state);
 }
 
+fn cancelAllTasks(c: command.Command, opaque_ptr: *anyopaque) command.Result {
+    const ctx: *RuntimeContext = @ptrCast(@alignCast(opaque_ptr));
+    _ = io(ctx) orelse return .failure(.not_ready);
+    if (ctx.active_export) |active| {
+        if (active.phase == .running or active.phase == .prepared or active.phase == .queued) {
+            var buffer: [32]u8 = undefined;
+            const arg = std.fmt.bufPrint(&buffer, "{d}", .{active.task_id}) catch return .failure(.invalid_arguments);
+            const result = cancelTask(.{ .name = c.name, .arg = arg }, opaque_ptr);
+            if (result.code != .ok) return result;
+        }
+    }
+    var index = ctx.export_count;
+    while (index > 0) {
+        index -= 1;
+        var buffer: [32]u8 = undefined;
+        const arg = std.fmt.bufPrint(&buffer, "{d}", .{ctx.exports[index].task_id}) catch return .failure(.invalid_arguments);
+        const result = cancelTask(.{ .name = c.name, .arg = arg }, opaque_ptr);
+        if (result.code != .ok) return result;
+    }
+    ctx.status.set("已请求取消所有未完成任务");
+    return .success;
+}
+
 fn listTasks(c: command.Command, opaque_ptr: *anyopaque) command.Result {
     const ctx: *RuntimeContext = @ptrCast(@alignCast(opaque_ptr));
     const after = if (c.arg) |text| std.fmt.parseInt(u64, text, 10) catch return .failure(.invalid_arguments) else 0;
@@ -700,6 +723,7 @@ pub fn register(ctx: *RuntimeContext) void {
     ctx.command.register("editor.asset.insert", insertAsset);
     ctx.command.register("editor.export.png", exportPng);
     ctx.command.register("task.cancel", cancelTask);
+    ctx.command.register("task.cancel_all", cancelAllTasks);
     ctx.command.register("task.retry", retryTask);
     ctx.command.register("task.list", listTasks);
     ctx.command.register("editor.resize.add", addResize);

@@ -12,7 +12,7 @@ const gpu = @import("gpu.zig");
 const glass = @import("glass.zig");
 const raster = @import("raster.zig");
 const text_blend = @import("text_blend.zig");
-const texture_upload = @import("d3d11_texture.zig");
+const d3d11_texture = @import("d3d11_texture.zig");
 const source = @embedFile("shader.hlsl");
 
 const api = @import("d3d11_glue.zig");
@@ -85,20 +85,7 @@ const CreateSamplerState = api.CreateSamplerState;
 
 /// A shader of `source`, entry point `entry`, as `create` makes it.
 fn shader(device: *Com, comptime entry: [:0]const u8, comptime target: [:0]const u8, comptime create: usize) !*Com {
-    var blob: ?*Blob = null;
-    var errors: ?*Blob = null;
-    const compile = D3DCompile() orelse return error.ShaderCompilerMissing;
-    const hr = compile(source, source.len, "shader.hlsl", null, null, entry, target, 0, 0, &blob, &errors);
-    if (errors) |e| {
-        if (hr < 0) std.log.err("nanoui: HLSL {s} ({s}):\n{s}", .{ entry, target, e.bytes()[0..e.size()] });
-        e.release();
-    }
-    try check(hr);
-    const b = blob orelse return error.ShaderCompile;
-    defer b.release();
-    var out: ?*Com = null;
-    try check(device.slot(*const fn (*Com, [*]const u8, usize, ?*anyopaque, *?*Com) callconv(.winapi) HRESULT, create)(device, b.bytes(), b.size(), null, &out));
-    return out orelse error.ShaderCompile;
+    return api.shaderFrom(device, source, "shader.hlsl", entry, target, create);
 }
 
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
@@ -140,7 +127,6 @@ pub const Renderer = struct {
     images_generation: u64 = std.math.maxInt(u64),
     text_params: text_blend.Params = .{},
     rgb_text: bool = true,
-    frame_textures: texture_upload.Textures = .{},
     frame: Target = .{},
     /// The size the last frame was drawn at, which the frame texture may be
     /// larger than (it is grown, never shrunk): what `read` and the copy to
@@ -157,6 +143,12 @@ pub const Renderer = struct {
     /// Whether `deinit` releases the device and context: it does only when
     /// this made them.
     owns_device: bool = false,
+    /// The frame's textures (`ui.texture`), set by whoever draws it, as
+    /// `metal.zig`'s are; `slots` holds their GPU copies.
+    textures: []const gpu.Texture = &.{},
+    slots: d3d11_texture.Slots = .{},
+    /// The texture the next draw samples at t5 (one texture instance's).
+    bound_texture: ?*Com = null,
 
     /// A hardware device (WARP when there is none), every shader, and the
     /// state one frame is drawn with.
@@ -173,14 +165,11 @@ pub const Renderer = struct {
     /// and a shader whose `Instance` was 96 bytes instead of 144, and printed
     /// numbers from an earlier, working build while doing it.
     pub fn init() !Renderer {
-        var device: ?*Com = null;
-        var context: ?*Com = null;
-        if (D3D11CreateDevice(null, 1, null, bgra_support, null, 0, sdk_version, &device, null, &context) < 0) {
-            if (D3D11CreateDevice(null, 5, null, bgra_support, null, 0, sdk_version, &device, null, &context) < 0)
-                return error.NoDevice;
-        }
-        const dev = device orelse return error.NoDevice;
-        const ctx = context orelse return error.NoDevice;
+        // Made as the app's shared device is (`d3d11_device.zig`): video
+        // support where there is some, multithread protected.
+        const pair = try @import("d3d11_device.zig").create();
+        const dev = pair.device;
+        const ctx = pair.context;
         errdefer {
             ctx.release();
             dev.release();
@@ -237,10 +226,11 @@ pub const Renderer = struct {
         if (r.images_srv) |t| t.release();
         if (r.images) |t| t.release();
         for ([_]*Com{ r.params, r.sampler, r.rasterizer, r.blend, r.quad_vs, r.quad_ps, r.glass_ps, r.pass_vs, r.down_ps, r.blur_ps }) |s| s.release();
+        r.slots.deinit();
         r.frame.deinit();
+        r.snap.deinit();
         r.a.deinit();
         r.b.deinit();
-        r.frame_textures.deinit();
         if (r.owns_device) {
             r.context.release();
             r.device.release();
@@ -287,10 +277,10 @@ pub const Renderer = struct {
         }
     }
 
-    /// Draws `instances` and their per-frame `textures` over `clear`, `size`
-    /// points at `scale`, into the renderer's frame, then copies it into
-    /// `target` — a window's swap chain back buffer, or null for `read`.
-    pub fn draw(r: *Renderer, instances: []const gpu.Instance, textures: []const gpu.Texture, size: types.Size, scale: f32, clear: types.Color, target: ?*Com) void {
+    /// Draws `instances` over `clear`, `size` points at `scale`, into the
+    /// renderer's frame, then copies it into `target` — a window's swap
+    /// chain back buffer, or null to keep it where `read` finds it.
+    pub fn draw(r: *Renderer, instances: []const gpu.Instance, size: types.Size, scale: f32, clear: types.Color, target: ?*Com) void {
         const g = r.context;
         const w: usize = @intFromFloat(@max(1, @round(size.w * scale)));
         const h: usize = @intFromFloat(@max(1, @round(size.h * scale)));
@@ -304,12 +294,15 @@ pub const Renderer = struct {
         if (f.rtv == null or f.srv == null) return;
         r.frame_w = w;
         r.frame_h = h;
+        // The textures first: an app's D3D11 texture may be converted by the
+        // colour stage, which draws into its slot's target with a viewport
+        // of its own, so the frame's target and viewport are set after it.
+        r.slots.prepare(r.device, g, r.textures);
 
         setViewport(g, @floatFromInt(w), @floatFromInt(h));
         bindTarget(g, f.rtv.?);
         const rgba: [4]f32 = .{ clear.r, clear.g, clear.b, 1 };
         g.slot(*const fn (*Com, *Com, *const [4]f32) callconv(.winapi) void, ClearRenderTargetView)(g, f.rtv.?, &rgba);
-        r.frame_textures.sync(r.device, g, textures);
         // The instances go up first: `setState` binds their view, and on the
         // first frame the buffer and its view are only made by the upload.
         r.uploadInstances(instances);
@@ -317,19 +310,12 @@ pub const Renderer = struct {
 
         var first: usize = 0;
         while (first < instances.len) {
+            // What comes before the next pane, in one draw.
             var end = first;
-            while (end < instances.len and instances[end].kind != gpu.Kind.glass and instances[end].kind != gpu.Kind.texture) end += 1;
-            r.drawRange(false, size, scale, first, end - first, .{}, null);
+            while (end < instances.len and instances[end].kind != gpu.Kind.glass) end += 1;
+            r.drawRun(instances, size, scale, first, end);
             if (end == instances.len) break;
-            if (instances[end].kind == gpu.Kind.glass) {
-                r.drawPane(instances, end, size, scale);
-            } else {
-                const raw_slot = instances[end].border_width;
-                if (raw_slot >= 0 and raw_slot < @as(f32, @floatFromInt(r.frame_textures.slots.items.len))) {
-                    const slot: usize = @intFromFloat(raw_slot);
-                    r.drawRange(false, size, scale, end, 1, .{}, r.frame_textures.get(slot));
-                }
-            }
+            r.drawPane(instances, end, size, scale);
             first = end + 1;
         }
         if (target) |t| {
@@ -384,8 +370,25 @@ pub const Renderer = struct {
         g.slot(*const fn (*Com, u32) callconv(.winapi) void, IASetPrimitiveTopology)(g, topology_strip);
     }
 
+    /// Instances [first, end) with the quad shader: a texture's quad
+    /// (`ui.texture`) alone, its slot's texture bound at t5, as `metal.zig`'s
+    /// `drawRun` draws it.
+    fn drawRun(r: *Renderer, instances: []const gpu.Instance, size: types.Size, scale: f32, first: usize, end: usize) void {
+        var from = first;
+        for (first..end) |i| {
+            if (instances[i].kind != gpu.Kind.texture) continue;
+            r.drawRange(false, size, scale, from, i - from, .{});
+            from = i + 1;
+            const tex = r.slots.get(@intFromFloat(@max(0, instances[i].border_width))) orelse continue;
+            r.bound_texture = tex;
+            defer r.bound_texture = null;
+            r.drawRange(false, size, scale, i, 1, .{});
+        }
+        r.drawRange(false, size, scale, from, end - from, .{});
+    }
+
     /// Instances [first, first + count) in one instanced draw, into the frame.
-    fn drawRange(r: *Renderer, pane: bool, size: types.Size, scale: f32, first: usize, count: usize, extra: Params, frame_srv: ?*Com) void {
+    fn drawRange(r: *Renderer, pane: bool, size: types.Size, scale: f32, first: usize, count: usize, extra: Params) void {
         if (count == 0) return;
         const g = r.context;
         var p: Params = extra;
@@ -395,7 +398,7 @@ pub const Renderer = struct {
         g.slot(*const fn (*Com, ?*Com, ?*const anyopaque, u32) callconv(.winapi) void, PSSetShader)(g, if (pane) r.glass_ps else r.quad_ps, null, 0);
         var inst = [1]?*Com{r.instance_srv};
         g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, VSSetShaderResources)(g, 0, 1, &inst);
-        var views = [6]?*Com{ r.instance_srv, r.atlas_srv, r.images_srv, r.a.srv, r.native_atlas_srv, frame_srv };
+        var views = [6]?*Com{ r.instance_srv, r.atlas_srv, r.images_srv, r.a.srv, r.native_atlas_srv, r.bound_texture };
         g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, PSSetShaderResources)(g, 0, 6, &views);
         // The instance offset goes through `Params`: StartInstanceLocation
         // only moves vertex-buffer reads, not this structured buffer's.
@@ -458,7 +461,7 @@ pub const Renderer = struct {
             .origin = .{ @floatFromInt(b.area[0]), @floatFromInt(b.area[1]) },
             .size = .{ @floatFromInt(b.w), @floatFromInt(b.h) },
             .down = @floatFromInt(b.down),
-        }, null);
+        });
     }
 
     /// One pass of a pane's backdrop: `ps` reading `src` into `dst`, the

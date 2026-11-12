@@ -98,6 +98,31 @@ class Pipe:
     def read(self, length: int) -> bytes:
         return self.transfer(ctypes.create_string_buffer(length), length, False)
 
+    def read_message(self, max_length: int) -> bytes:
+        """Read one bounded variable-length control message, not a fixed-size frame."""
+        buffer = ctypes.create_string_buffer(max_length)
+        event = self.win.CreateEventW(None, 1, 0, None)
+        if not event:
+            raise ctypes.WinError(ctypes.get_last_error())
+        operation = Overlapped(event=event)
+        count = ctypes.c_uint32()
+        try:
+            if not self.win.ReadFile(self.handle, buffer, max_length, ctypes.byref(count), ctypes.byref(operation)):
+                error = ctypes.get_last_error()
+                if error != 997:  # ERROR_IO_PENDING
+                    raise ctypes.WinError(error)
+                if self.win.WaitForSingleObject(event, 5000) != 0:
+                    self.win.CancelIoEx(self.handle, ctypes.byref(operation))
+                    self.win.GetOverlappedResult(self.handle, ctypes.byref(operation), ctypes.byref(count), 1)
+                    raise TimeoutError("isolated Host control message exceeded five seconds")
+                if not self.win.GetOverlappedResult(self.handle, ctypes.byref(operation), ctypes.byref(count), 0):
+                    raise ctypes.WinError(ctypes.get_last_error())
+            if count.value == 0 or count.value > max_length:
+                raise RuntimeError(f"invalid Host control message length: {count.value}")
+            return buffer.raw[:count.value]
+        finally:
+            self.win.CloseHandle(event)
+
 
 class Workspace:
     def __init__(self, data: Path, evidence: dict):
