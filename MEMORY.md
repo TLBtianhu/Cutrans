@@ -68,6 +68,8 @@
 
 ## 最新实施记录
 
+- [2026-11-12 ABI 接线审计与构建残留清理](docs/memory/2026-11-12-abi-and-staging-audit.md)：确认 ShellApi 表字段与 Host RPC 分支由编译期强制，剩余人工映射已记录；精确删除 `zig-out/portable` 下 9 个旧 UI 残留文件（约 19.8 MB），重建后未再生，`verify-payload` 通过。
+
 - [2026-11-12 命令清单单一真源](docs/memory/2026-11-12-command-manifest.md)：新增 `vne/commands.zig` 统一 forwarded/runtime_only/managed/stale_allowed/node_creating；Shell 注册、过期白名单、workspace 分类改为读取同一清单；Runtime 注册表用测试断言与清单完全一致。`build test`、`verify-architecture`、`verify-repository` 通过，无行为变化。
 
 - [2026-11-11 事故恢复与工作区快照](docs/memory/2026-11-11-incident-recovery.md)：本机清理事件丢失 DSH 会话正文（Cutrans 75 轮），仓库源文件幸存；核对发现 11-09～11-11 全部改动未提交。修复 `verify_reconnect.py` 语法错误与停机窗口竞态，补齐重连 v2 语义和 Python 隐藏入口；`build test`、`verify-payload`、`verify-reconnect`、`verify-repository` 通过；工作区已提交并推送 `origin/master`。

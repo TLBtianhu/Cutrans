@@ -131,3 +131,5 @@ C2c2最终179/179构建步骤、新实际DLL／Host14组及同产物18项headles
 2026-11-11 事故恢复与快照：本机清理事件永久删除了 DSH 会话 `Cutrans-zig0.1` 的 75 轮正文（仓库源文件未受损）；核对发现 2026-11-09～11-11 的全部切片都还在工作区、未提交。修复 `tools/verify_reconnect.py` 的语法错误和停机窗口竞态，补齐重连 v2 的 `pump`/冷却/未受管命令语义，并把 uv CPython 3.12 加入用户 PATH 以恢复隐藏入口。`build test`、`verify-payload`、`verify-reconnect`（auto_detect=1）与 `verify-repository` 通过；工作区已作为 master 快照提交并推送 `origin/master`。未做真实 GUI/IME、安装更新或强制抢占验收；事故根因未查明，桌面索引备份与验证证据不得清理。详见 [事故恢复与快照](2026-11-11-incident-recovery.md)。
 
 2026-11-12 命令清单单一真源：新增 `vne/commands.zig`，把 Shell 转发、Runtime 内部、workspace managed、过期白名单和建节点命令集中到一处；`workspace.manages`/`createsNode`、`vm_client.register`/`allowedWhileStale` 改为读取该清单，Runtime 注册表测试断言与清单完全一致。`build test`、`verify-architecture`、`verify-repository` 通过；命令参数仍是字符串，schema/检查器和文档自动生成未做。详见 [命令清单单一真源](2026-11-12-command-manifest.md)。
+
+2026-11-12 ABI 接线审计与构建残留清理：ShellApi 表字段和 Host RPC `Kind` 分支已由编译期强制，新增字段仍需人工补 Kind/客户端映射；删除 `zig-out/portable` 下 9 个 2026-11-07 的旧 UI 残留（顶层/shell 的 wgpu、旧 desktop DLL 与六份旧许可证，约 19.8 MB），重建 portable 后未再生，`verify-payload` 通过。安装器与单文件发行不受影响；自动纯净化未实现。详见 [ABI 与残留审计](2026-11-12-abi-and-staging-audit.md)。
