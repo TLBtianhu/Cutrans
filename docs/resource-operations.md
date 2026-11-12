@@ -62,9 +62,9 @@ Resource API v2保持原结构布局及RPC编号，拒绝v1请求／响应；Hos
 
 v3在原Resource API尾部增加`work_snapshot`与`work_submit`，主Shell ABI仍为10，原登记／重定位／采用请求布局及RPC编号不变。新增工作快照RPC29、工作提交RPC30；线格式显式编码结构版本、长度和正文，不跨进程传递指针。旧v1／v2 Resource API客户端须显式升级，不能按相同包版本猜测表长。
 
-工作操作包括`create`、`save_draft`、`commit`和`discard`。`create`建立owned资源及工作revision 1；`save_draft`只保存草稿，不推进工作revision，也不替换正式Station输入；`commit`核对draft token和`base_revision`后推进一次工作revision并清除对应草稿元数据；`discard`只丢弃指定token。草稿token全局单调且不复用。过期base可以保存以保护输入，但提交时必须是当前工作revision，冲突保留草稿而不覆盖。
+工作操作包括`create`、`save_draft`、`commit`和`discard`。`create`建立owned资源及工作revision 1；`save_draft`只保存草稿，不推进工作revision，也不替换正式Station输入；`commit`核对draft token和`base_revision`后推进一次工作revision并清除对应草稿元数据；`discard`只丢弃指定token。草稿token全局单调且不复用。`base_revision`在保存和提交两处都必须是当前工作revision：落后客户端的草稿保存直接返回过期版本，不会写入一份提交时必然被拒的草稿；冲突保留旧草稿而不覆盖。
 
-正文分别发布到`library/work/<id>/<revision>.bin`和`library/drafts/<id>/<token>.bin`。完整字节写入并同步后才原子提交Catalog v4；目录、草稿元数据、成功回执与客户端高水位在同一Catalog提交生效。未引用候选不猜作垃圾自动删除，也不宣称文件与目录构成跨文件原子事务。当前正文和草稿单份上限16MiB，NanoUI文本编辑另限1MiB有效UTF-8且无NUL；其它二进制仍按素材处理。
+正文分别发布到`library/work/<id>/<revision>-<sha256>.bin`和`library/drafts/<id>/<token>-<sha256>.bin`。文件名带内容哈希，因此"Catalog 提交失败留下的未引用正文"不会与同一 revision 的重试（字节不同）冲突；旧数据根的`<revision>.bin`只读兼容仍可打开，新发布不再生成该名字。完整字节写入并同步后才原子提交Catalog v4；目录、草稿元数据、成功回执与客户端高水位在同一Catalog提交生效。未引用候选不猜作垃圾自动删除，也不宣称文件与目录构成跨文件原子事务。当前正文和草稿单份上限16MiB，NanoUI文本编辑另限1MiB有效UTF-8且无NUL；其它二进制仍按素材处理。
 
 `work_snapshot`优先返回已持久草稿，否则返回当前工作正文，携工作revision、编辑base、draft token、来源类型和双向hash。两次读取必须属于同一快照，否则拒绝拼接。`readVersion`与Document／History／Job继续按原hash读取已采用固定版本，工作头前进不会重写旧输入；未被采用且未留存的旧工作字节不承诺永久恢复。
 

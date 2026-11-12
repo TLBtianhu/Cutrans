@@ -656,7 +656,10 @@ pub const Catalog = struct {
     pub fn saveWorkDraft(self: *Catalog, ctx: *RuntimeContext, id: u64, base_revision: u64, expected_draft: u64, bytes: []const u8, envelope: WorkReceipt) !WorkReceipt {
         const item = self.getMut(id) orelse return error.ResourceNotFound;
         if (item.kind != .owned) return error.ResourceNotReference;
-        if (base_revision == 0 or base_revision > item.work_revision) return error.StaleWorkRevision;
+        // A draft may only be based on the current head. Accepting an older base
+        // would store a draft that commitWorkDraft can never accept, so a client
+        // that fell behind would keep refreshing an uncommittable draft.
+        if (base_revision == 0 or base_revision != item.work_revision) return error.StaleWorkRevision;
         if (item.draft_revision != expected_draft or (expected_draft != 0 and item.draft_base_revision != base_revision)) return error.DraftConflict;
         const token = self.next_draft_revision;
         const next_token = std.math.add(u64, token, 1) catch return error.DraftRevisionExhausted;
@@ -1189,6 +1192,97 @@ const TestFileLock = struct {
         self.* = undefined;
     }
 };
+
+fn workEnvelope(sequence: u64, mode: @import("vne").resource_api.WorkMode) WorkReceipt {
+    return .{
+        .client_hi = 7,
+        .client_lo = 9,
+        .sequence = sequence,
+        .mode = mode,
+        .request_hash = @splat(5),
+        .resource_id = 0,
+        .work_revision = 0,
+        .draft_revision = 0,
+        .content_hash = @splat(0),
+    };
+}
+
+test "an abandoned work body never blocks the create that reuses its revision" {
+    var tc = try LibraryCase.init();
+    defer tc.deinit();
+    var ctx: RuntimeContext = undefined;
+    try tc.open(&ctx);
+    defer ctx.deinit();
+    const first = try ctx.library.createWork(&ctx, "first.txt", "first body", workEnvelope(1, .create));
+    try std.testing.expectEqual(@as(u64, 1), first.resource_id);
+    const next_id = ctx.library.next_id;
+    const blocker = try tc.blockCatalog();
+    defer std.testing.allocator.free(blocker);
+    if (ctx.library.createWork(&ctx, "second.txt", "second body", workEnvelope(2, .create))) |_| {
+        return error.TestExpectedError;
+    } else |_| {}
+    // The failed create already published its body before the Catalog commit, so
+    // an unreferenced body now occupies this identity. The identity itself must
+    // not be consumed.
+    try std.testing.expectEqual(next_id, ctx.library.next_id);
+    try std.testing.expectEqual(@as(usize, 1), ctx.library.count);
+    var data_dir = try std.Io.Dir.openDirAbsolute(std.testing.io, tc.data, .{});
+    defer data_dir.close(std.testing.io);
+    const abandoned = try @import("work_files.zig").read(data_dir, std.testing.io, std.testing.allocator, .work, next_id, 1, hash("second body"));
+    std.testing.allocator.free(abandoned);
+    try tc.unblockCatalog(blocker);
+    const retried = try ctx.library.createWork(&ctx, "second.txt", "second body", workEnvelope(3, .create));
+    try std.testing.expectEqual(next_id, retried.resource_id);
+    var body = try ctx.library.read(&ctx, retried.resource_id);
+    defer body.deinit(ctx.allocator);
+    try std.testing.expectEqualStrings("second body", body.bytes);
+}
+
+test "an abandoned draft body never blocks the retry that reuses its token" {
+    var tc = try LibraryCase.init();
+    defer tc.deinit();
+    var ctx: RuntimeContext = undefined;
+    try tc.open(&ctx);
+    defer ctx.deinit();
+    _ = try ctx.library.createWork(&ctx, "note.txt", "base body", workEnvelope(1, .create));
+    const first = try ctx.library.saveWorkDraft(&ctx, 1, 1, 0, "draft one", workEnvelope(2, .save_draft));
+    try std.testing.expectEqual(@as(u64, 1), first.draft_revision);
+    const next_token = ctx.library.next_draft_revision;
+    const blocker = try tc.blockCatalog();
+    defer std.testing.allocator.free(blocker);
+    if (ctx.library.saveWorkDraft(&ctx, 1, 1, first.draft_revision, "draft two", workEnvelope(3, .save_draft))) |_| {
+        return error.TestExpectedError;
+    } else |_| {}
+    try std.testing.expectEqual(next_token, ctx.library.next_draft_revision);
+    try tc.unblockCatalog(blocker);
+    const retried = try ctx.library.saveWorkDraft(&ctx, 1, 1, first.draft_revision, "draft two", workEnvelope(4, .save_draft));
+    try std.testing.expectEqual(next_token, retried.draft_revision);
+    const bytes = try ctx.library.readDraft(&ctx, 1);
+    defer ctx.allocator.free(bytes);
+    try std.testing.expectEqualStrings("draft two", bytes);
+}
+
+test "a draft must be saved against the current work head" {
+    var tc = try LibraryCase.init();
+    defer tc.deinit();
+    var ctx: RuntimeContext = undefined;
+    try tc.open(&ctx);
+    defer ctx.deinit();
+    _ = try ctx.library.createWork(&ctx, "note.txt", "base body", workEnvelope(1, .create));
+    const draft = try ctx.library.saveWorkDraft(&ctx, 1, 1, 0, "first draft", workEnvelope(2, .save_draft));
+    const committed = try ctx.library.commitWorkDraft(&ctx, 1, draft.draft_revision, workEnvelope(3, .commit));
+    try std.testing.expectEqual(@as(u64, 2), committed.work_revision);
+    // A client that still holds the old head is refused instead of storing a
+    // draft that commitWorkDraft requires to equal the current head and can
+    // therefore never accept.
+    try std.testing.expectError(error.StaleWorkRevision, ctx.library.saveWorkDraft(&ctx, 1, 1, 0, "stale base", workEnvelope(4, .save_draft)));
+    const fresh = try ctx.library.saveWorkDraft(&ctx, 1, 2, 0, "second draft", workEnvelope(5, .save_draft));
+    const advanced = try ctx.library.commitWorkDraft(&ctx, 1, fresh.draft_revision, workEnvelope(6, .commit));
+    try std.testing.expectEqual(@as(u64, 3), advanced.work_revision);
+    var body = try ctx.library.read(&ctx, 1);
+    defer body.deinit(ctx.allocator);
+    try std.testing.expectEqualStrings("second draft", body.bytes);
+}
 
 test "RAM detach survives a deleted original without touching authorization or Station leases" {
     var tc = try LibraryCase.init();
