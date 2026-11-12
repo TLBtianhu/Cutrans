@@ -68,6 +68,8 @@
 
 ## 最新实施记录
 
+- [2026-11-12 目录成员显式收纳](docs/memory/2026-11-12-directory-member-collection.md)：本机文件页新增“收录到同名文件夹”，以当前目录名在资源库根下创建/复用文件夹，登记单个成员后用既有 `library.move` 建立 `parent_id` 关系；资源身份、内容哈希与来源授权不变。无新 ABI/命令/Catalog 格式；`verify-local-sources` 的隐藏 GUI 场景验证文件夹与成员关系。
+
 - [2026-11-12 未决请求：停止等待与跨 Shell 标记](docs/memory/2026-11-12-pending-wait-stop.md)：新增 `hasPending`/`abandonPending`，编辑器在结果未确认时显示警告和“停止等待未确认修改”；停止等待不重放、不回滚，镜像刷新后显示 VM 真实状态，后续编辑靠 expected stamp 防止静默覆盖。`data/shell/pending-unknown.txt` 让下一个 Shell 仍能看到“可能已执行”的提示，确认后清除；标记不携带可重放请求。单元测试、`test-nanoui-desktop`、`verify-payload` 与 `verify-unknown-result`（含真实 Host 丢回复 + 重启、Shell 退出后标记警告）通过；Host/Shell 两段已闭环，按钮点击与发行验收仍未覆盖。
 
 - [2026-11-12 ABI 接线审计与构建残留清理](docs/memory/2026-11-12-abi-and-staging-audit.md)：确认 ShellApi 表字段与 Host RPC 分支由编译期强制，剩余人工映射已记录；精确删除 `zig-out/portable` 下 9 个旧 UI 残留文件（约 19.8 MB），重建后未再生，`verify-payload` 通过。

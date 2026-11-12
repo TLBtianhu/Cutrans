@@ -8,7 +8,7 @@ const palette = @import("palette");
 
 pub const Register = struct {
     context: ?*anyopaque,
-    run: *const fn (?*anyopaque, []const u8) anyerror!void,
+    run: *const fn (?*anyopaque, []const u8, ?[]const u8) anyerror!u64,
 };
 
 const Kind = enum { file, directory };
@@ -222,15 +222,24 @@ pub const State = struct {
         try self.open(path, 0);
     }
 
-    pub fn registerSelected(self: *State) !void {
+    fn folderLabel(path: []const u8) []const u8 {
+        const name = std.fs.path.basename(path);
+        return if (name.len == 0) "本机目录" else name;
+    }
+
+    pub fn registerSelected(self: *State, into_folder: bool) !void {
         const page = if (self.current) |*value| value else return error.NoLocalDirectory;
         const index = self.selected orelse return error.NoLocalSelection;
         if (index >= page.entries.len or page.entries[index].kind != .file) return error.OnlyFileRegistration;
         const path = try self.selectedPath();
         defer self.allocator.free(path);
         const callback = self.on_register orelse return error.RegistrationUnavailable;
-        try callback.run(callback.context, path);
-        self.setStatus("已显式登记；资源库与消费结果分别对账", .{});
+        _ = try callback.run(callback.context, path, if (into_folder) folderLabel(page.path) else null);
+        if (into_folder) {
+            self.setStatus("已收录到同名文件夹；成员与来源保持显式关系", .{});
+        } else {
+            self.setStatus("已显式登记；资源库与消费结果分别对账", .{});
+        }
     }
 
     pub fn view(self: *State, c: *ui.Context) void {
@@ -252,7 +261,8 @@ pub const State = struct {
             if (ui.button(c, "刷新", .{ .disabled = self.current == null }).clicked) self.refresh() catch |err| self.setStatus("刷新失败：{s}", .{@errorName(err)});
             if (ui.button(c, "下一页", .{ .disabled = self.current == null or self.current.?.next_cursor == null }).clicked) self.nextPage() catch |err| self.setStatus("翻页失败：{s}", .{@errorName(err)});
             if (ui.button(c, "打开选中项", .{ .disabled = self.selected == null }).clicked) self.openSelected() catch |err| self.setStatus("打开失败：{s}", .{@errorName(err)});
-            if (ui.button(c, "收录到资源库", .{ .variant = .primary, .disabled = self.selected == null }).clicked) self.registerSelected() catch |err| self.setStatus("登记失败：{s}", .{@errorName(err)});
+            if (ui.button(c, "收录到资源库", .{ .variant = .primary, .disabled = self.selected == null }).clicked) self.registerSelected(false) catch |err| self.setStatus("登记失败：{s}", .{@errorName(err)});
+            if (ui.button(c, "收录到同名文件夹", .{ .disabled = self.selected == null }).clicked) self.registerSelected(true) catch |err| self.setStatus("收纳失败：{s}", .{@errorName(err)});
         }
         if (self.current) |*page| {
             ui.textf(c, .{ .size = 12, .color = c.theme.muted }, "{s} · 第 {d} 项起 · 共 {d} 项", .{ page.path, page.cursor + 1, page.total });
@@ -335,6 +345,29 @@ pub fn verify(state: anytype, tester: *ui.Tester) !void {
     try std.testing.expect(state.page == .library and state.library.preview == null);
     state.showPage(.files);
     tester.frame();
+    try tester.clickText("a.txt");
+    try tester.clickText("收录到同名文件夹");
+    try std.testing.expect(state.page == .library);
+    const folder_label = std.fs.path.basename(root);
+    var folder_id: ?u64 = null;
+    for (state.library.catalog.items[0..state.library.catalog.count]) |item| {
+        if (item.node_kind == .folder and item.parent_id == 0 and std.mem.eql(u8, item.label, folder_label)) {
+            folder_id = item.id;
+            break;
+        }
+    }
+    try std.testing.expect(folder_id != null);
+    var member_found = false;
+    for (state.library.catalog.items[0..state.library.catalog.count]) |item| {
+        if (item.node_kind == .resource and item.parent_id == folder_id.? and std.mem.eql(u8, item.label, "a.txt")) {
+            member_found = true;
+            break;
+        }
+    }
+    try std.testing.expect(member_found);
+    std.debug.print("CUTRANS_LOCAL_FOLDER_OK folder=1 member=1 label={s}\n", .{folder_label});
+    state.showPage(.files);
+    tester.frame();
     try tester.clickText("b.png");
     try std.testing.expect(state.files.preview != null and state.files.preview.?.kind == .image);
     try tester.clickText("收录到资源库");
@@ -363,5 +396,5 @@ pub fn verify(state: anytype, tester: *ui.Tester) !void {
     try std.testing.expectEqual(before_managed, state.library.catalog.count);
     try std.testing.expect(std.mem.indexOf(u8, state.library.status(), "登记失败") != null);
     std.debug.print("CUTRANS_DROP_IMPORT_OK register_file=1 managed_root_refused=1\n", .{});
-    std.debug.print("CUTRANS_LOCAL_FILES_OK browse=1 text=1 directory=1 page=1 refresh=1 register=1 insert=1\n", .{});
+    std.debug.print("CUTRANS_LOCAL_FILES_OK browse=1 text=1 directory=1 page=1 refresh=1 register=1 folder=1 insert=1\n", .{});
 }

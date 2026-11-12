@@ -96,10 +96,22 @@ pub const State = struct {
         allocator.destroy(self);
     }
 
-    fn registerLocal(pointer: ?*anyopaque, path: []const u8) !void {
+    fn registerLocal(pointer: ?*anyopaque, path: []const u8, folder_label: ?[]const u8) !u64 {
         const self: *State = @ptrCast(@alignCast(pointer.?));
-        _ = try self.library.importExternal(path);
+        const id = try self.library.importExternal(path);
+        if (folder_label) |label| {
+            var folder: ?u64 = null;
+            for (self.library.catalog.items[0..self.library.catalog.count]) |item| {
+                if (item.node_kind == .folder and item.parent_id == 0 and std.mem.eql(u8, item.label, label)) {
+                    folder = item.id;
+                    break;
+                }
+            }
+            const parent = folder orelse try self.library.createFolder(0, label);
+            try self.library.moveLibrary(id, parent);
+        }
         self.page = .library;
+        return id;
     }
 
     pub fn importDropped(self: *State, paths: []const []const u8) void {

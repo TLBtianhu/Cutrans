@@ -65,9 +65,11 @@ def main() -> None:
     evidence = {"format": "cutrans-unknown-result-verification/1", "root": str(root), "checks": [], "passed": False}
     process = None
     stopped = False
+    active_data = data
     try:
         # First prove the ordinary hidden desktop scenario works, so the later
         # document edits of the fault demo cannot mask a normal regression.
+        active_data = data
         invoke(console, "start", data, "portable")
         process = start_shell(console, data, desktop_log, {})
         require(process.wait(timeout=120) == 0, "the ordinary hidden desktop scenario failed")
@@ -116,6 +118,7 @@ def main() -> None:
         # to a fresh data root so the ordinary desktop scenario still starts
         # from its expected document shape.
         marker_data = root / "marker-data"
+        active_data = marker_data
         os.environ["CUTRANS_TEST_DROP_WORKSPACE_REPLY"] = "1"
         try:
             invoke(console, "start", marker_data, "portable")
@@ -132,6 +135,7 @@ def main() -> None:
         stopped = True
 
         fresh_data = root / "marker-fresh"
+        active_data = fresh_data
         invoke(console, "start", fresh_data, "portable")
         stopped = False
         (fresh_data / "shell").mkdir(parents=True, exist_ok=True)
@@ -160,7 +164,7 @@ def main() -> None:
                 process.kill()
         if not stopped:
             try:
-                invoke(console, "stop", data, "portable")
+                invoke(console, "stop", active_data, "portable")
             except Exception as error:
                 evidence["cleanup_error"] = repr(error)
         (root / "unknown-result.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")

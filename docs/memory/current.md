@@ -134,4 +134,6 @@ C2c2最终179/179构建步骤、新实际DLL／Host14组及同产物18项headles
 
 2026-11-12 ABI 接线审计与构建残留清理：ShellApi 表字段和 Host RPC `Kind` 分支已由编译期强制，新增字段仍需人工补 Kind/客户端映射；删除 `zig-out/portable` 下 9 个 2026-11-07 的旧 UI 残留（顶层/shell 的 wgpu、旧 desktop DLL 与六份旧许可证，约 19.8 MB），重建 portable 后未再生，`verify-payload` 通过。安装器与单文件发行不受影响；自动纯净化未实现。详见 [ABI 与残留审计](2026-11-12-abi-and-staging-audit.md)。
 
+2026-11-12 目录成员显式收纳：本机文件页新增“收录到同名文件夹”，以当前目录名在资源库根下创建/复用逻辑文件夹，登记单个成员后用既有 `library.move` 建立 `parent_id` 关系；资源身份、内容哈希和来源授权不变，没有新增 ABI、命令或 Catalog 格式。`verify-local-sources` 的隐藏 GUI 场景断言文件夹与成员关系（`CUTRANS_LOCAL_FOLDER_OK`），DLL/Host/UI 回归通过。文件夹按标签复用，不记录源目录绝对路径，也不是目录整体收纳；真实 GUI/IME 与安装仍未验收。详见 [目录成员收纳](2026-11-12-directory-member-collection.md)。
+
 2026-11-12 未决请求停止等待（Host/Shell 两段闭环）：`vm_client` 新增 `hasPending`/`abandonPending`，编辑器在结果未确认时显示警告和“停止等待未确认修改”。停止等待只结束客户端等待，不重放也不回滚；刷新后的文档镜像显示 VM 真实状态，后续编辑用刷新后的 expected stamp 防止旧请求晚到造成静默覆盖。`data/shell/pending-unknown.txt` 在 Shell 重启后继续提示“可能已执行”，确认后清除且标记不携带可重放请求。新增 `verify-unknown-result`：真实 Host 提交后丢回复、Shell 保留 pending、重启后 `wrong_epoch` 清空且不重复提交、新 identity 显式编辑成功；并验证 pending 时 Shell 退出后下一个 Shell 打印 `CUTRANS_UNKNOWN_HISTORICAL` 并完成普通桌面场景。单元测试、`test-nanoui-desktop` 与 `verify-payload` 通过；按钮点击、取消/回滚协议、真实 GUI/IME 与安装验收仍未覆盖。详见 [停止等待入口](2026-11-12-pending-wait-stop.md)。
