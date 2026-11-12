@@ -25,7 +25,7 @@
 - `build test`：退出 0，`developer-7bfc7d788665/`。
 - `verify-payload`：退出 0，`developer-c1725f97bc7d/`；真实 Host + 隐藏 Shell，含 `CUTRANS_PREVIEW_OK` 与 `CUTRANS_NANOUI_DESKTOP_OK`。
 - `verify-reconnect`：退出 0，`developer-375bbeb12171/`；`reconnect-56e4baa9eda8/` 记录 Host 停止、Shell 检测、Host 重启、自动重连与之后完整桌面场景，`auto_detect=1`。
-- `verify-repository`：退出 0，`developer-f311979387cc/`（提交前最终树）。
+- `verify-repository`：退出 0；快照提交前为 `developer-f311979387cc/`，补充推送与认证记录后复跑为 `developer-fd4eb297ad9f/`。
 - 以上均为隐藏控制台运行；没有真实 GUI/IME、安装/更新/卸载或强制抢占验收。
 
 ## 快照
