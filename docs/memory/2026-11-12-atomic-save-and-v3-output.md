@@ -38,8 +38,8 @@
 ## 新发现（本片暴露，未修复）
 
 1. **vne 模块根的测试从不执行**。`test_support.addModule(b, test_step, vne)` 以 `vne/root.zig` 为根，实测发现 0 个测试（`zig test vne/root.zig --test-filter ...` 输出 "All 0 tests passed"；同一过滤条件在 `zig test vne/documents.zig` 命中 1 个）。Zig 只为可达声明收集测试，纯 re-export 根不触发分析。其余 `vne` 文件（abi/commands/uri/mounts/runtime_pack/runtime_lock/environment…）是否因此从未运行，需要逐文件确认；本片只把 `vne/documents.zig` 补成显式根。
-2. **两个既有锁测试在当前机器上稳定失败**：`imaging/image.zig` 的 "exclusive Windows target lock preserves old bytes…" 与 `runtime/resource_library.zig` 的 "RAM detach lock failures…"。根因是 `NtSetInformationFile(rename)` 对 share=0 占用的目标返回 `STATUS_SHARING_VIOLATION`，Zig std 在 `dirRenameWindowsInner` 里对未映射状态码 `unexpectedStatus` 直接 panic，测试拿不到可捕获的 error。HEAD 上同样复现（21 次 panic / 23 个失败二进制），与本片改动无关。
-3. **退出码不足以代表测试全绿**：上述 panic 型失败不改变 `zig build test` 的退出码（HEAD 与本片均退出 0）；只有断言型失败才会让退出码变 1（用临时探针验证过）。因此"build test 退出 0"不能单独作为测试通过的证据，需要同时检查日志里的 `failed command`。
+2. **两个既有锁测试在构建运行器下被标记失败，但测试本身通过**。`imaging/image.zig` 的 "exclusive Windows target lock preserves old bytes…" 与 `runtime/resource_library.zig` 的 "RAM detach lock failures…" 会触发 `NtSetInformationFile(rename)` 的 `STATUS_SHARING_VIOLATION`；`std.Io` 对未映射的状态码打印诊断栈并返回 `error.Unexpected`，测试用自己的 `else |_| {}` 正常吞掉。`resource_library` 测试二进制单独运行是 **143/143 通过、退出 0**（本片后续确认）。失败只在 `zig build test` 的构建运行器路径出现，HEAD 上同样复现；根因未定，与 Zig 0.17 在 Windows 隐藏控制台下的运行器行为有关（本仓库此前记录过同类"间歇 loader／Unexpected"现象）。
+3. **退出码不足以代表测试全绿**：运行器型失败不改变 `zig build test` 的退出码（HEAD 与本片均退出 0）；只有断言型失败才会让退出变 1（用临时探针验证过）。因此"build test 退出 0"不能单独作为测试通过的证据，需要同时检查日志里的 `failed command`，并且对可疑项单独运行测试二进制确认。
 
 ## 边界
 

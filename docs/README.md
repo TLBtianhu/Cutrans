@@ -20,6 +20,8 @@
 
 - [项目记忆](../MEMORY.md)：宪法、主题索引和最新实施记录。
 - [现役状态](memory/current.md)：当前实现、原型限额和未完成范围。
+- [审计结论与进度检查点](memory/2026-11-12-audit-checkpoint.md)：全仓审计的 P0/P1/P2 清单、已修/未修、复现命令与接续顺序。
+- [工作正文发布顺序与草稿基线](memory/2026-11-12-work-publication-order.md)：内容寻址正文、旧名兼容、`base_revision` 判据对齐，以及构建运行器失败的归因修正。
 - [保存原子性与 v3 显式输出](memory/2026-11-12-atomic-save-and-v3-output.md)：`.cut` 原子替换、journal 还原保存标志、v3 必须显式 `output=`，以及测试基础设施暴露的三个问题。
 - [目录成员显式收纳](memory/2026-11-12-directory-member-collection.md)：本机文件收录到同名逻辑文件夹、成员关系与隐藏 GUI 验证。
 - [架构评审与收敛方案（建议，未实施）](memory/2026-11-12-architecture-review.md)：清晰度标准、结构债与分阶段收敛路线。

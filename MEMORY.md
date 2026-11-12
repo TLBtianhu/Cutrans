@@ -69,7 +69,11 @@
 
 ## 最新实施记录
 
-- [2026-11-12 保存原子性与 v3 显式输出](docs/memory/2026-11-12-atomic-save-and-v3-output.md)：`.cut` 落盘改用 `vne/atomic_write.zig` 的临时文件＋flush＋原子替换（全仓此前唯一一处截断式持久写）；History journal 记录并还原 `dirty`/`legacy`，`doc.save` 改为写前日志→原子目标→确认标记；canonical v3 要求显式 `output=`，行对齐截断被拒。`verify-write-order`（4 项真机断言）、`verify-architecture`、`verify-repository`、`build test` 退出 0，新增 `vne/documents.zig` 测试根 22/22 通过。同片暴露三项未修复问题：**vne 模块根测试从未执行**、两个既有锁测试因 `SHARING_VIOLATION` panic 稳定失败（HEAD 同样复现）、panic 型失败不改变 `build test` 退出码。已提交 `0bc7ba51`。
+- [2026-11-12 审计结论与进度检查点](docs/memory/2026-11-12-audit-checkpoint.md)：全仓审计的完整落盘（P0：RPC 迁移许可来自 wire、本机 RPC 无认证、`.command_result` 绕过受管语义；P1：Pack 校验与装载分离、payload 缓存根、旧 import 绕过来源边界、`asset.export` 目标无边界、容量无回收、GUI 落后不重同步；P2 与基础设施另列），加上本次两个切片已修/未修清单、复现命令与下一步顺序。**恢复会话先读这一页。** 功能提交见 `0bc7ba51` 与 `714ebafd`。
+
+- [2026-11-12 工作正文发布顺序与草稿基线](docs/memory/2026-11-12-work-publication-order.md)：`library/work|drafts/<id>/` 的正文与草稿改为「revision/token + 内容哈希」命名，旧 `<revision>.bin` 只读兼容；这样 Catalog 提交失败留下的未引用正文不会再让同一 revision 的重试撞上 `WorkContentMismatch`。`save_draft` 的 `base_revision` 现在必须等于当前工作头（原来保存接受 `base < head`、提交却要求相等，会写出一份永远提交不了的草稿）。`verify-work-documents`、`verify-architecture`、`verify-repository` 退出 0，`resource_library` 测试二进制单独运行 143/143 通过。同片修正上一片对锁测试的错误归因：两个锁测试**本身通过**，失败只出现在构建运行器路径（HEAD 同样复现，根因未定）。已提交 `714ebafd`。
+
+- [2026-11-12 保存原子性与 v3 显式输出](docs/memory/2026-11-12-atomic-save-and-v3-output.md)：`.cut` 落盘改用 `vne/atomic_write.zig` 的临时文件＋flush＋原子替换（全仓此前唯一一处截断式持久写）；History journal 记录并还原 `dirty`/`legacy`，`doc.save` 改为写前日志→原子目标→确认标记；canonical v3 要求显式 `output=`，行对齐截断被拒。`verify-write-order`（4 项真机断言）、`verify-architecture`、`verify-repository`、`build test` 退出 0，新增 `vne/documents.zig` 测试根 22/22 通过。同片暴露三项未修复问题：**vne 模块根测试从未执行**、两个锁测试在构建运行器下被标记失败但单独运行通过（HEAD 同样复现）、运行器型失败不改变 `build test` 退出码。已提交 `0bc7ba51`。
 
 - [2026-11-12 架构评审与收敛方案（建议，未实施）](docs/memory/2026-11-12-architecture-review.md)：定义“清晰”的可验收标准，列出 Runtime 单体、命令/ABI 多处接线、持久格式分散等结构债，并提出契约冻结、单一真源、域接口、数据生命周期、测试与构建、产品硬化六阶段。**尚未批准或实施**；建议从阶段 0 + 命令 manifest v2 + `verify-contract` 开始。
 

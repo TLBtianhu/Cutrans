@@ -140,9 +140,11 @@ C2c2最终179/179构建步骤、新实际DLL／Host14组及同产物18项headles
 
 2026-11-12 保存原子性与 v3 显式输出：`.cut` 落盘改用 `vne/atomic_write.zig` 的临时文件＋flush＋原子替换（此前是全仓唯一一处截断式持久写，同文件已存在正确原语）；History journal 记录并还原 `dirty`/`legacy`，恢复不再无条件声称已保存；`doc.save` 改为写前日志(pending)→原子目标→确认标记，确认失败只降级状态栏。canonical v3 要求显式 `output=`，行对齐截断不再被接受（v1/v2 隐式输出迁移不变）。新增 `verify-write-order`（4 项真机断言）与 `vne/documents.zig` 测试根。同片暴露三项未修复问题：vne 模块根测试从未执行、两个既有锁测试因 `SHARING_VIOLATION` panic 稳定失败、panic 型失败不改变 `build test` 退出码。`build test`、`verify-write-order`、`verify-architecture`、`verify-repository` 退出 0；真实 GUI/IME、安装与掉电注入未验收。详见 [保存原子性](2026-11-12-atomic-save-and-v3-output.md)。
 
+2026-11-12 工作正文发布顺序与草稿基线：`library/work|drafts/<id>/` 的正文改名为「revision/token + 内容哈希」，旧 `<revision>.bin` 只读兼容；Catalog 提交失败留下的未引用正文不再与同一 revision 的重试冲突。`save_draft` 的 `base_revision` 必须等于当前工作头，落后客户端的草稿保存直接返回过期版本，不再写入一份提交时必然被拒的草稿。`verify-work-documents`（`CUTRANS_WORK_DOCUMENTS_VERIFY_OK`）、`verify-architecture`、`verify-repository` 退出 0；`resource_library` 测试二进制单独运行 143/143 通过。同片修正上一片对两个锁测试的错误归因：测试本身通过，失败只在构建运行器路径（HEAD 同样复现）。GUI 客户端缺少"落后后重读快照"的重同步，真实操作中会停在拒绝状态。详见 [发布顺序](2026-11-12-work-publication-order.md)。
+
 ## 2026-11-12 进度快照
 
-- 当前 `master` 已包含本片：功能提交 `0bc7ba51`，其后只有一次 `docs:` 记忆更新（只改记录，未改产物），此前基线 `fdbe3ab6`；工作区干净。
+- 当前 `master` 已包含本会话三个片：`0bc7ba51`（保存原子性与 v3 显式输出）、`fb124808`（其后的记忆更新）、`714ebafd`（工作正文发布顺序与草稿基线）；其后为记忆检查点提交，工作区干净。审计结论与接续顺序见[审计结论与进度检查点](2026-11-12-audit-checkpoint.md)。
 - 本日连续完成：
   - `51efd2af` 命令清单单一真源；
   - `a8769edb` ABI 接线审计与 portable 残留清理；
@@ -152,7 +154,8 @@ C2c2最终179/179构建步骤、新实际DLL／Host14组及同产物18项headles
   - `64f601ea` 闭环记忆；
   - `56388fd3` 目录成员显式收纳；
   - `fdbe3ab6` README／文档导航刷新，并确立“用户可见能力变化时同片更新 README”的长期规则；
-  - `0bc7ba51` 保存原子性与 v3 显式输出（本片）。
-- 最近一次验证：本片 `verify-write-order` `developer-5b8e33bdb0d2/`（`CUTRANS_WRITE_ORDER_OK checks=4`）、`build test` `developer-21ae574309d1/`（仅既有锁测试失败）、`verify-architecture` 退出 0、`verify-repository` 退出 0；此前 `test-nanoui-desktop` `developer-ae8b73268866/`、`verify-local-sources` `developer-593019ce8e31/`（证据 `local-sources-f511496e014d/`）、`verify-unknown-result` `developer-deaa34671ca8/`（证据 `unknown-result-acbfc979349f/`）、`verify-repository` `developer-8f6ba36f2578/`。
-- 当前边界：未决结果的 Host/Shell 两段已闭环；目录收纳只按标签复用逻辑文件夹，不记录源目录绝对路径，不是目录整体收纳；保存路径已原子化，但 `createWork`/`saveWorkDraft` 的发布顺序问题未修；真实 GUI/IME、安装升级卸载和真实媒体仍未验收。
-- 下一步建议：先修 [架构评审](2026-11-12-architecture-review.md) 未覆盖的两处容量与回收问题，或按计划继续 `createWork`/draft 发布语义；`build test` 的退出码与 vne 测试覆盖问题需要单独确认，不能再用"退出 0"单独作为全绿证据。
+  - `0bc7ba51` 保存原子性与 v3 显式输出；
+  - `714ebafd` 工作正文发布顺序与草稿基线。
+- 最近一次验证：本片 `verify-work-documents` `developer-55b6032eaaef/`（`CUTRANS_WORK_DOCUMENTS_VERIFY_OK`）、`resource_library` 测试二进制单独运行 143/143、`build test` `developer-6230dc80ded0/`、`verify-architecture` 退出 0、`verify-repository` 退出 0；此前 `verify-write-order` `developer-5b8e33bdb0d2/`（`CUTRANS_WRITE_ORDER_OK checks=4`）、`test-nanoui-desktop` `developer-ae8b73268866/`、`verify-local-sources` `developer-593019ce8e31/`（证据 `local-sources-f511496e014d/`）、`verify-unknown-result` `developer-deaa34671ca8/`（证据 `unknown-result-acbfc979349f/`）。
+- 当前边界：未决结果的 Host/Shell 两段已闭环；目录收纳只按标签复用逻辑文件夹，不记录源目录绝对路径，不是目录整体收纳；`.cut` 保存与工作正文/草稿的发布顺序已修，容量与回收（8 个外部来源、8 个授权槽、32 个库资源均无删除）和 `asset.export` 目标边界仍未修；真实 GUI/IME、安装升级卸载和真实媒体仍未验收。
+- 下一步建议：做容量与回收（`source.remove`/`library.remove` 与槽位回收）以及 `asset.export` 的目标白名单；`build test` 的构建运行器失败、vne 测试覆盖、GUI 客户端落后重同步三项需要单独排期，不能再用"退出 0"单独作为全绿证据。
