@@ -206,6 +206,9 @@ pub const State = struct {
     }
 
     fn commands(self: *State, c: *ui.Context) void {
+        if (vm_client.hasPending()) {
+            ui.text(c, "上次修改的结果尚未确认：可等待 Host 恢复，或核对文档后停止等待。停止等待不会撤销可能已执行的修改。", .{ .color = c.theme.danger, .size = 12 });
+        }
         ui.row(c, .{ .width = .fill, .gap = 8 });
         {
             defer ui.end(c);
@@ -213,6 +216,9 @@ pub const State = struct {
             if (ui.button(c, "重做", .{}).clicked) self.redo() catch |err| self.fail(err);
             if (ui.button(c, "保存会话", .{}).clicked) self.save() catch |err| self.fail(err);
             if (ui.button(c, if (self.ctx.playback_view.active) "停止播放" else "播放 4 帧", .{}).clicked) self.togglePlayback() catch |err| self.fail(err);
+            if (vm_client.hasPending()) {
+                if (ui.button(c, "停止等待未确认修改", .{ .variant = .danger }).clicked) vm_client.abandonPending(self.ctx);
+            }
         }
         ui.row(c, .{ .width = .fill, .gap = 8, .align_items = .center });
         {

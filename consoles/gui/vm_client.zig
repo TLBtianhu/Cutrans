@@ -329,6 +329,28 @@ fn forwardManaged(ctx: *RuntimeContext, c: command.Command) command.Result {
     return result;
 }
 
+pub fn hasPending() bool {
+    return client.pending != null;
+}
+
+/// Stop waiting for a request whose result is unknown. This never replays it
+/// and never claims a rollback: the next snapshot shows what the VM actually
+/// holds. A later edit still carries the refreshed expected stamp, so a late
+/// commit cannot be overwritten silently.
+pub fn abandonPending(ctx: *RuntimeContext) void {
+    const pending = client.pending orelse return;
+    pending.deinit();
+    client.pending = null;
+    client.identity = null;
+    client.next_sequence = 1;
+    client.sequence_exhausted = false;
+    refreshMirrors(ctx) catch {
+        ctx.status.set("已停止等待；Host 仍不可用，稍后刷新文档镜像");
+        return;
+    };
+    ctx.status.set("已停止等待；该修改可能已在 VM 执行，请核对文档后继续");
+}
+
 fn forward(c: command.Command, opaque_ptr: *anyopaque) command.Result {
     const ctx: *RuntimeContext = @ptrCast(@alignCast(opaque_ptr));
     if (workspace.manages(c.name)) return forwardManaged(ctx, c);
@@ -1127,6 +1149,42 @@ test "invalid receipt is uncertain while an authoritative refusal is never retri
     try pump(ctx);
     try std.testing.expectEqual(calls, remote.submit_calls);
     try std.testing.expect(client.pending == null);
+}
+
+test "stopping an unknown wait clears pending without replaying committed truth" {
+    const ctx = try testContext();
+    defer freeTestContext(ctx);
+    var remote: MockShell = .{ .lose_next_response = true, .apply_gain = 0.25 };
+    const api = remote.api();
+    try initWithIdentity(&api, .{ .hi = 101, .lo = 202 });
+    try refreshMirrors(ctx);
+    try std.testing.expectEqual(command.Code.not_ready, forward(.{ .name = "editor.gain.set", .arg = "c1 0.25" }, ctx).code);
+    try std.testing.expect(hasPending());
+    abandonPending(ctx);
+    try std.testing.expect(!hasPending());
+    try std.testing.expect(client.identity == null);
+    try std.testing.expectEqual(@as(u64, 1), client.next_sequence);
+    const submits = remote.submit_calls;
+    try pump(ctx);
+    try std.testing.expectEqual(submits, remote.submit_calls);
+    // The lost reply may already describe a committed edit. Stopping the wait
+    // reveals that truth through the projection; it does not roll it back.
+    try std.testing.expectEqual(@as(f32, 0.25), ctx.document.nodes[1].value);
+    try std.testing.expect(std.mem.indexOf(u8, ctx.status.get(), "停止等待") != null);
+}
+
+test "stopping without a pending request keeps the client identity" {
+    const ctx = try testContext();
+    defer freeTestContext(ctx);
+    var remote: MockShell = .{};
+    const api = remote.api();
+    try initWithIdentity(&api, .{ .hi = 101, .lo = 202 });
+    try refreshMirrors(ctx);
+    abandonPending(ctx);
+    try std.testing.expect(!hasPending());
+    try std.testing.expectEqual(@as(u64, 101), client.identity.?.hi);
+    try std.testing.expectEqual(@as(u64, 1), client.next_sequence);
+    try std.testing.expectEqual(@as(usize, 0), remote.submit_calls);
 }
 
 test "queued stale intent keeps its original expected stamp and receives a refusal" {

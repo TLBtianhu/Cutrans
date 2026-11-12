@@ -133,3 +133,5 @@ C2c2最终179/179构建步骤、新实际DLL／Host14组及同产物18项headles
 2026-11-12 命令清单单一真源：新增 `vne/commands.zig`，把 Shell 转发、Runtime 内部、workspace managed、过期白名单和建节点命令集中到一处；`workspace.manages`/`createsNode`、`vm_client.register`/`allowedWhileStale` 改为读取该清单，Runtime 注册表测试断言与清单完全一致。`build test`、`verify-architecture`、`verify-repository` 通过；命令参数仍是字符串，schema/检查器和文档自动生成未做。详见 [命令清单单一真源](2026-11-12-command-manifest.md)。
 
 2026-11-12 ABI 接线审计与构建残留清理：ShellApi 表字段和 Host RPC `Kind` 分支已由编译期强制，新增字段仍需人工补 Kind/客户端映射；删除 `zig-out/portable` 下 9 个 2026-11-07 的旧 UI 残留（顶层/shell 的 wgpu、旧 desktop DLL 与六份旧许可证，约 19.8 MB），重建 portable 后未再生，`verify-payload` 通过。安装器与单文件发行不受影响；自动纯净化未实现。详见 [ABI 与残留审计](2026-11-12-abi-and-staging-audit.md)。
+
+2026-11-12 未决请求停止等待：`vm_client` 新增 `hasPending`/`abandonPending`，编辑器在结果未确认时显示警告和“停止等待未确认修改”。停止等待只结束客户端等待，不重放也不回滚；刷新后的文档镜像显示 VM 真实状态，后续编辑用刷新后的 expected stamp 防止旧请求晚到造成静默覆盖。单元测试、`test-nanoui-desktop` 与 `verify-payload` 通过；pending 仍不跨 Shell 重启保存，也没有取消/回滚协议。详见 [停止等待入口](2026-11-12-pending-wait-stop.md)。
