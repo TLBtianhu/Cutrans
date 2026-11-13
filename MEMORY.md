@@ -69,6 +69,8 @@
 
 ## 最新实施记录
 
+- [2026-11-12 界面渲染与媒体渲染分家（用户立法）](docs/memory/2026-11-12-gui-media-split.md)：GUI 用 NanoUI；视频、图片等媒体渲染必须完全自研并归 VM，不得使用 NanoUI（类比 AE：界面框架与原生特效分开）。两侧只通过帧与数据交付接触，叠层由 GUI 绘制，分析结果由 VM 计算。核对到一处灰区：GUI 仍在本地解码素材预览 PNG，待定。待定接口：媒体侧 GPU 后端，以及与 NanoUI 的 D3D11 纹理零拷贝互操作。
+
 - [2026-11-12 统一为单进程虚拟环境：删除 Host 进程](docs/memory/2026-11-12-single-process.md)：用户决定彻底删除 Host（取代 11-08 中 Claude 关于保留进程边界的推荐）。一个进程就是一个环境实例：进程内 `ShellApi` 加 `Control` 安全退出，业务受理闸门下沉到 Runtime，单写者锁，生命周期记录；删除 Host、RPC、管道、重连、未决标记、`--role`、旧 exe 与旧 Shell Pack；调试改用 `cutrans.exe exec --script=<jsonl>`、App 隐藏场景、DLL ctypes 与只读 `status`。全部改写的验证与回归通过；注册边界的既有回归仍未修。**新会话先读这一页。**
 
 - [2026-11-12 参照系：FilmCraft／EffectCraft 现状与对齐方案（调研，未实施）](docs/memory/2026-11-12-artcraft-reference.md)：用户决定以两者最新版本为参照系，学习并做理念的解耦与对齐（“Linux 对照 Unix”）。记录两者的分层、命令注册表、Tick 时间基准、`Arc` 结构共享快照撤销、效果定义即数据、CPU 参照答案与 GPU 对比测试；对照 Cutrans 列出对齐、借鉴与应保持的差异（声明式 comp 图，人与 AI 共写源码）；Claude 对整体用 Zig 重写持保留意见，建议学接口、复用零件。同页悬置两项待确认：v4 改为先定内存模型、`.cut` 后置；“三种生法已被推翻”在记忆中查无记录，待用户复述。只读了文档，未读源码。
