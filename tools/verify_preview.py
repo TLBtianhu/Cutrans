@@ -1,4 +1,4 @@
-"""Verify preview frames through a real Host and hidden Desktop Shell."""
+"""Verify VM preview frames inside two single-process desktop instances."""
 
 from __future__ import annotations
 
@@ -12,8 +12,7 @@ sys.dont_write_bytecode = True
 
 from build_paths import OUTPUT
 from verification_paths import check_root, claim, default_root, retain
-from verify_host import invoke
-from verify_same_file import desktop_case, require, run_role
+from environment_harness import desktop_case, require
 
 ROOT = Path(__file__).resolve().parents[1]
 EPOCH = re.compile(r"epoch=([0-9a-f]+):([0-9a-f]+)")
@@ -33,38 +32,20 @@ def main() -> None:
     evidence = {"format": "cutrans-preview-verification/1", "root": str(root), "checks": [], "passed": False}
     try:
         desktop_case(console, root, evidence)
-        role_log = (root / "desktop-role.log").read_text(encoding="utf-8")
-        require("CUTRANS_PREVIEW_OK" in role_log,
-            "the hidden desktop did not exercise VM preview frames")
-        require("cache=1 short_buffer=1" in role_log,
-            "preview verification did not cover cache reuse and short-buffer rejection")
-        require("epoch=" in role_log and "revision=" in role_log,
-            "preview verification did not expose the runtime epoch/revision")
-        first_epoch = read_epoch(role_log)
-
-        data = root / "desktop data"
-        document = root / "desktop document.cut"
-        _, restarted = invoke(console, "start", data, "portable")
-        require(restarted["boot"] >= 1, "the Host did not restart for the preview epoch check")
-        try:
-            restart_log = run_role(console, data, "shell", console.parent / "payload/desktop",
-                check_root(root / "desktop-role-restart.log"), document)
-        finally:
-            try:
-                invoke(console, "stop", data, "portable")
-            except Exception as error:
-                evidence["restart_cleanup_error"] = repr(error)
-        require("CUTRANS_PREVIEW_OK" in restart_log,
-            "preview did not survive a Host restart")
-        require("CUTRANS_PREVIEW_EPOCH_RESET" in restart_log,
-            "the restarted Host did not reject the pre-restart preview epoch")
-        second_epoch = read_epoch(restart_log)
-        require(first_epoch != second_epoch,
-            "a restarted Host reused the previous preview epoch")
-        evidence["checks"].append("real_host_hidden_shell_preview_frames_cache_short_buffer_stale")
-        evidence["checks"].append("host_restart_changes_preview_epoch")
+        first_log = (root / "desktop.log").read_text(encoding="utf-8")
+        second_log = (root / "desktop-again.log").read_text(encoding="utf-8")
+        for log in (first_log, second_log):
+            require("CUTRANS_PREVIEW_OK" in log, "the hidden desktop did not exercise VM preview frames")
+            require("cache=1 short_buffer=1" in log,
+                "preview verification did not cover cache reuse and short-buffer rejection")
+            require("epoch=" in log and "revision=" in log,
+                "preview verification did not expose the runtime epoch/revision")
+        require(read_epoch(first_log) != read_epoch(second_log),
+            "a new environment instance reused the previous preview epoch")
+        evidence["checks"].append("single_process_preview_frames_cache_short_buffer_stale")
+        evidence["checks"].append("each_instance_has_a_new_preview_epoch")
         evidence["passed"] = True
-        print("CUTRANS_PREVIEW_VERIFY_OK host=1 hidden_shell=1 frames=2 cache=1 short_buffer=1 stale=1 restart_epoch_changed=1")
+        print("CUTRANS_PREVIEW_VERIFY_OK single_process=1 frames=2 cache=1 short_buffer=1 stale=1 instance_epoch_changed=1")
     except BaseException as error:
         evidence["error"] = repr(error)
         raise

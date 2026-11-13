@@ -11,15 +11,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 from verification_paths import claim, default_root, check_root, retain
-from verify_host import invoke
-from verify_same_file import require, run_role
+from environment_harness import require, run_app
 
 
-def run_scenario(console: Path, data: Path, log: Path) -> str:
-    invoke(console, "start", data, "portable")
-    text = run_role(console, data, "shell", None, log, None)
-    invoke(console, "stop", data, "portable")
-    return text
+def run_scenario(console: Path, data: Path, log: Path, mode: str = "portable") -> str:
+    return run_app(console, data, log, mode=mode)
 
 
 def main() -> None:
@@ -40,7 +36,7 @@ def main() -> None:
             os.environ["TMP"] = str(cache_temp)
             data = check_root(root / "data")
             text = run_scenario(console, data, check_root(root / "role.log"))
-            require("CUTRANS_NANOUI_DESKTOP_OK" in text and "CUTRANS_SHELL_DETACHED" in text,
+            require("CUTRANS_NANOUI_DESKTOP_OK" in text and "CUTRANS_ENVIRONMENT_STOPPED" in text,
                 "single executable did not complete the headless NanoUI scenario")
 
             manifests = list(cache_temp.glob("**/desktop/payload.json"))
@@ -49,7 +45,7 @@ def main() -> None:
             manifests[0].write_bytes(b"{}")
             data2 = check_root(root / "data-repaired")
             text = run_scenario(console, data2, check_root(root / "repaired-role.log"))
-            require("CUTRANS_NANOUI_DESKTOP_OK" in text and "CUTRANS_SHELL_DETACHED" in text,
+            require("CUTRANS_NANOUI_DESKTOP_OK" in text and "CUTRANS_ENVIRONMENT_STOPPED" in text,
                 "single executable did not recover after a corrupted cache")
             require(manifests[0].read_bytes() == expected,
                 "single executable did not rewrite the corrupted cache manifest")
@@ -72,16 +68,13 @@ def main() -> None:
         shutil.copyfile(console, installed_app / "cutrans.exe")
         installed_console = installed_app / "cutrans.exe"
         installed_data = check_root(root / "installed-data")
-        invoke(installed_console, "start", installed_data, "installed")
-        text = run_role(installed_console, installed_data, "shell", None,
-            check_root(root / "installed-role.log"), None, mode="installed")
-        invoke(installed_console, "stop", installed_data, "installed")
-        require("CUTRANS_NANOUI_DESKTOP_OK" in text and "CUTRANS_SHELL_DETACHED" in text,
+        text = run_scenario(installed_console, installed_data, check_root(root / "installed-role.log"), mode="installed")
+        require("CUTRANS_NANOUI_DESKTOP_OK" in text and "CUTRANS_ENVIRONMENT_STOPPED" in text,
             "installed single executable did not use its embedded installed context")
         require(sorted(path.name for path in installed_app.iterdir()) == ["cutrans.exe"],
             "installed single executable created an external context file")
 
-        print("CUTRANS_SINGLE_EXE_VERIFY_OK files=1 start=1 shell=1 stop=1 cache_repaired=1 installed_context=1 external_payload=0 external_context=0")
+        print("CUTRANS_SINGLE_EXE_VERIFY_OK files=1 single_process=1 desktop=1 stop=1 cache_repaired=1 installed_context=1 external_payload=0 external_context=0")
     finally:
         retain(root)
         print(f"Single-exe evidence retained: {root}")

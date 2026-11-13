@@ -2,7 +2,7 @@
 
 This verifies identity repair, not the future resource CAS/relink/adopt features.
 All files are synthetic and beneath one claimed verification root. No GUI or
-system registration is used; child processes use verify_host's quiet wrapper.
+system registration is used; child processes use the quiet automation_process wrapper.
 """
 from __future__ import annotations
 
@@ -22,15 +22,20 @@ from product import identity
 from verification_paths import check_root, claim, default_root, retain
 from verify_assets import asset_projection
 from verify_edit_commit import exclusive_file
-from verify_host import invoke
 from verify_input import hashes
 from verify_jobs import ACCEPTED, FAILED, OK, require, sha256, tiny_png
-from verify_jobs_async import AsyncNative, wait_host_terminal
-from verify_resource_versions import (assert_output, configure, document_state,
-    export as export_version, history_bytes, host_legacy, host_listing, host_rpc,
-    host_source_read, import_source, listing, pin_path, preview, source_read,
-    wait_host_file)
-from verify_workspace_rpc import Workspace
+from verify_jobs_async import AsyncNative
+from verify_resource_versions import (
+    assert_output,
+    configure,
+    document_state,
+    export as export_version,
+    history_bytes,
+    import_source,
+    listing,
+    pin_path,
+    preview,
+    source_read)
 
 INVALID_ARGUMENTS, INVALID_STATE, LEGACY_UNVERIFIED = 3, 5, 16
 VERIFIED, LEGACY = "win32-file-id/1", "legacy-cutrans-layout/1"
@@ -331,68 +336,6 @@ def legacy_migration_cases(library, resource, root, evidence):
         runtime.close()
 
 
-def host_identity_case(console, root, evidence):
-    data, source = root / "legacy identity Host data", check_root(root / "Host legacy source with spaces.png")
-    content, client = tiny_png(COLOR), (0xC2A0, 0xC2A1)
-    source.write_bytes(content)
-    digest, observed = sha256(source), win_identity(source)
-    stopped = True
-    try:
-        _, status = invoke(console, "status", data, "portable")
-        require(status["state"] == "unreachable", "owned identity Host case already has an active instance")
-        _, status = invoke(console, "start", data, "portable")
-        stopped = False
-        require(status["state"] == "running", "identity Host did not start")
-        wire = Workspace(data, evidence)
-        status, handle, payload = host_rpc(wire, 16, str(source).encode("utf-8"))
-        require(status == ACCEPTED and handle > 0 and not payload, "Host could not import its synthetic Source")
-        inserted = wire.submit(wire.request(client, 1, wire.snapshot()["stamp"], "editor.asset.insert", str(handle)))
-        require(inserted["status"] == OK, "Host did not adopt its synthetic Source")
-        host_legacy(wire, "doc.save", "session://Host-legacy-work.cut")
-        _, status = invoke(console, "stop", data, "portable")
-        require(status["state"] == "stopped", "fixture Host did not stop")
-        stopped = True
-        raw, legacy = legacy_fixture(data, {1: observed}, root / "Host-legacy-raw-input.json")
-        _, status = invoke(console, "start", data, "portable")
-        stopped = False
-        require(status["state"] == "running", "Host could not recover a legacy authorization catalog")
-        before, old_history, old_library = wire.snapshot(), history_bytes(data), library_bytes(data)
-        host_source_read(wire, "external://1", expected=LEGACY_UNVERIFIED)
-        host_legacy(wire, "asset.open", "library://1", INVALID_STATE)
-        require(host_source_read(wire, "library://1", digest) == content and auth_path(data).read_bytes() == raw,
-                "Host implicitly confirmed legacy raw authority or refused its retained version")
-        accepted = wire.submit(wire.request((0xC2A2, 0xC2A3), 1, before["stamp"], "editor.export.png", "session://exports/Host-legacy-retained.png"))
-        require(accepted["status"] == ACCEPTED, "legacy Host did not admit retained work")
-        target = data / "exports/Host-legacy-retained.png"
-        wait_host_file(wire, target)
-        completed = wait_host_terminal(wire, accepted["task_id"])
-        output = assert_output(completed, target, COLOR)
-        host_legacy(wire, "source.reauthorize", confirmation(1, digest, source))
-        assert_real_entry(entry_for(data, 1), observed)
-        require(host_source_read(wire, "external://1", digest) == content
-                and host_source_read(wire, "library://1") == content and wire.snapshot() == before
-                and history_bytes(data) == old_history and library_bytes(data) == old_library,
-                "Host confirmation changed the work/library or failed to restore exact raw/current reads")
-        confirmed = auth_path(data).read_bytes()
-        host_legacy(wire, "source.reauthorize", confirmation(1, digest, source))
-        require(auth_path(data).read_bytes() == confirmed, "Host duplicate confirmation rewrote its catalog")
-        _, status = invoke(console, "stop", data, "portable")
-        require(status["state"] == "stopped", "confirmed Host did not stop")
-        stopped = True
-        _, status = invoke(console, "start", data, "portable")
-        stopped = False
-        require(status["state"] == "running" and not host_listing(wire), "confirmed Host did not restart with an empty Station")
-        require(host_source_read(wire, "external://1", digest) == content and auth_path(data).read_bytes() == confirmed,
-                "Host restart did not preserve explicit verified identity")
-        evidence["Host_identity"] = {"legacy_raw": legacy, "confirmed": entry_for(data, 1), "retained_export": output,
-                                      "shell_attached": False}
-        evidence["checks"].append("real_Host_RPC_denies_legacy_then_explicit_confirmation_restores_exact_bytes_without_editing_work")
-    finally:
-        if not stopped:
-            _, status = invoke(console, "stop", data, "portable")
-            require(status["state"] == "stopped", "owned identity Host cleanup failed")
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=default_root("source-identity"))
@@ -413,7 +356,6 @@ def main():
         real_identity_cases(library, resource, root, evidence)
         atomic_replacement_case(library, resource, root, evidence)
         legacy_migration_cases(library, resource, root, evidence)
-        host_identity_case(portable / "cutrans_vm.exe", root, evidence)
         require(hashes(portable) == before and not (portable / "data").exists(), "identity verification changed the tested artifact")
         evidence["passed"] = True
         print(f"CUTRANS_SOURCE_IDENTITY_VERIFY_OK checks={len(evidence['checks'])} evidence={root}")

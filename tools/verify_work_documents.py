@@ -19,15 +19,19 @@ sys.dont_write_bytecode = True
 from build_paths import OUTPUT
 from product import identity
 from verification_paths import check_root, claim, default_root, retain
-from verify_host import invoke
 from verify_input import ByteSlice, hashes
 from verify_jobs import ACCEPTED, OK, SMALL, require, tiny_png
 from verify_resource_operations import Native, configure
 from verify_resource_registration import acquire
-from verify_resource_versions import (COLOR_A, COLOR_B, assert_output, document_state,
-    history_bytes, host_rpc, row, source_read)
+from verify_resource_versions import (
+    COLOR_A,
+    COLOR_B,
+    assert_output,
+    document_state,
+    history_bytes,
+    row,
+    source_read)
 from verify_workspace import Stamp
-from verify_workspace_rpc import Pipe, Workspace
 
 VERSION = 4
 CREATE, SAVE_DRAFT, COMMIT, DISCARD = 1, 2, 3, 4
@@ -191,94 +195,6 @@ def receipt_ring_case(library, runtime_dir, root, evidence):
         runtime.close()
 
 
-def host_request(value):
-    label, body = value.label, value.body
-    label_bytes = c.string_at(label.ptr, label.len) if label.len else b""
-    body_bytes = c.string_at(body.ptr, body.len) if body.len else b""
-    return struct.pack("<II6QII2Q", c.sizeof(WorkRequest), VERSION, value.client_hi, value.client_lo, value.sequence,
-        value.resource_id, value.base_revision, value.expected_draft_revision, value.mode, 0,
-        len(label_bytes), len(body_bytes)) + label_bytes + body_bytes
-
-
-def host_submit(wire, payload, disposition=None):
-    status, value, raw = host_rpc(wire, 30, payload)
-    require(status == value == 0 and len(raw) == OUTCOME_SIZE, f"Host work outcome failed: {status}")
-    outcome = WorkOutcome.from_buffer_copy(raw)
-    require(outcome.struct_size == c.sizeof(WorkOutcome) and outcome.api_version == VERSION
-        and outcome.sequence == struct.unpack_from("<Q", payload, 24)[0]
-        and outcome.disposition in (1, 2, 3), "invalid Host work outcome")
-    if disposition is not None:
-        require(outcome.disposition == disposition, "Host did not replay the persistent work receipt")
-    return outcome
-
-
-def discard_host_reply(wire, payload):
-    header = struct.pack("<8sIIQII", b"CUTRSH2\0", 30, 0, 0, len(payload), 0)
-    wire.frames.append({"kind": 30, "request_header": header.hex(), "request_payload": payload.hex(),
-        "response_deliberately_not_read": True})
-    connection = Pipe(wire.endpoint)
-    try:
-        connection.write(header)
-        connection.write(payload)
-    finally:
-        connection.close()
-
-
-def host_snapshot(wire, resource_id):
-    status, value, raw = host_rpc(wire, 29, identity=resource_id)
-    require(status == value == 0 and len(raw) >= SNAPSHOT_SIZE, f"Host work snapshot failed: {status}")
-    metadata = WorkSnapshot.from_buffer_copy(raw[:SNAPSHOT_SIZE])
-    expected = raw[:SNAPSHOT_SIZE]
-    status, value, second = host_rpc(wire, 29, expected, identity=resource_id)
-    require(status == value == 0 and second == raw, "Host work snapshot changed between reads")
-    body = raw[SNAPSHOT_SIZE:]
-    require(metadata.resource_id == resource_id and metadata.body_len == len(body)
-        and sha(body) == bytes(metadata.body_hash).hex(), "Host returned an inconsistent work body")
-    return metadata, body
-
-
-def host_case(console, root, evidence):
-    data = check_root(root / "host data")
-    wire = Workspace(data, evidence)
-    stopped = False
-    try:
-        _, started = invoke(console, "start", data, "portable")
-        require(started["state"] == "running", "work Host did not start")
-        create = host_request(request(1, CREATE, label=b"host-note.txt", body=b"host old"))
-        discard_host_reply(wire, create)
-        created = host_submit(wire, create, 2)
-        require(created.resource_id == 1 and created.work_revision == 1,
-            "lost create reply duplicated or lost the resource")
-        draft = host_request(request(2, SAVE_DRAFT, 1, 1, 0, body=b"host new"))
-        saved = host_submit(wire, draft, 1)
-        require(saved.work_revision == 1 and saved.draft_revision > 0, "Host draft advanced the work head")
-        commit = host_request(request(3, COMMIT, 1, 0, saved.draft_revision))
-        committed = host_submit(wire, commit, 1)
-        require(committed.work_revision == 2 and committed.draft_revision == 0, "Host commit did not publish revision two")
-        metadata, body = host_snapshot(wire, 1)
-        require(metadata.work_revision == 2 and body == b"host new", "Host snapshot returned another generation")
-        _, stopped_result = invoke(console, "stop", data, "portable")
-        require(stopped_result["state"] == "stopped", "work Host did not stop")
-        stopped = True
-        invoke(console, "start", data, "portable")
-        stopped = False
-        replay = host_submit(wire, commit, 2)
-        require(replay.work_revision == 2 and host_snapshot(wire, 1)[1] == b"host new",
-            "Host restart lost the work receipt or current body")
-        _, stopped_result = invoke(console, "stop", data, "portable")
-        require(stopped_result["state"] == "stopped", "restarted work Host did not stop")
-        stopped = True
-        evidence["checks"].append("host_lost_reply_replay_and_restart_preserve_work_draft_commit_and_persistent_receipts")
-        evidence["host_stopped"] = True
-    finally:
-        if not stopped:
-            try:
-                invoke(console, "stop", data, "portable")
-                evidence["host_stopped"] = True
-            except Exception as error:
-                evidence["host_cleanup_error"] = repr(error)
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=default_root("work-documents"))
@@ -294,10 +210,9 @@ def main():
         configure(library)
         fixed_version_case(library, portable / "runtime", root, evidence)
         receipt_ring_case(library, portable / "runtime", root, evidence)
-        host_case(portable / "cutrans_vm.exe", root, evidence)
         require(hashes(portable) == before, "work verification modified the tested artifact")
         evidence["passed"] = True
-        print("CUTRANS_WORK_DOCUMENTS_VERIFY_OK fixed_job=1 draft_commit=1 ring=1 cold_receipt=1 host_lost_reply=1 host_restart=1")
+        print("CUTRANS_WORK_DOCUMENTS_VERIFY_OK fixed_job=1 draft_commit=1 ring=1 cold_receipt=1")
     except BaseException as error:
         evidence["error"] = repr(error)
         raise

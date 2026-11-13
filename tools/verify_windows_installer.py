@@ -223,12 +223,12 @@ def system_check(installer: Path, root: Path, proof: Path | None) -> None:
         # is intentionally not accepted as legacy user data.
         console = app / "app/cutrans.exe"
         normal = ["--mode=installed", "--purpose=normal", f"--data={data}"]
-        result = run([str(console), "start", *normal])
+        # One headless environment instance creates and normally stops the Session.
+        script = root / "normal-session.jsonl"
+        script.write_text('{"call": "stop"}\n', encoding="utf-8")
+        result = run([str(console), "exec", f"--script={script}", *normal])
         if result.returncode:
-            raise RuntimeError("isolated installed Host could not create its normal Session")
-        result = run([str(console), "stop", *normal])
-        if result.returncode:
-            raise RuntimeError("isolated installed Host could not save its normal Session")
+            raise RuntimeError("isolated installed environment could not create and save its normal Session")
         sentinel = data / "user-work-sentinel.bin"
         sentinel.write_bytes(b"preserve this synthetic user work across a same-payload reinstall")
         before = hashes(data)

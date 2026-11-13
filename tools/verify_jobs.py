@@ -20,10 +20,9 @@ from build_paths import OUTPUT
 from product import identity
 from verification_paths import check_root, claim, default_root, retain
 from verify_edit_commit import exclusive_file
-from verify_host import invoke, run
+from environment_harness import exec_script
 from verify_input import ByteSlice, hashes, string_slice
 from verify_workspace import Outcome, Runtime, configure as workspace_configure, request, stamp
-from verify_workspace_rpc import MAX_PAYLOAD, Pipe, Workspace
 
 OK, ACCEPTED, FAILED, SMALL = 0, 1, 8, 15
 JOBS_READ = 24
@@ -363,86 +362,41 @@ def native_cases(library, resource, root, evidence):
         runtime.close()
 
 
-def pipe_jobs(wire, after=0):
-    if after == 0:
-        status, payload = wire.rpc(JOBS_READ, b"")
-    else:
-        connection = Pipe(wire.endpoint)
-        header = struct.pack("<8sIIQII", b"CUTRSH2\0", JOBS_READ, 0, after, 0, 0)
-        frame = {"kind": JOBS_READ, "request_header": header.hex(), "request_payload": ""}
-        wire.frames.append(frame)
-        try:
-            connection.write(header)
-            response = connection.read(32)
-            frame["response_header"] = response.hex()
-            magic, kind, status, value, length, reserved = struct.unpack("<8sIiQII", response)
-            require(magic == b"CUTRSR2\0" and kind == JOBS_READ and value == reserved == 0 and length <= MAX_PAYLOAD,
-                    "invalid paged jobs pipe reply")
-            payload = connection.read(length) if length else b""
-            frame["response_payload"] = payload.hex()
-        finally:
-            connection.close()
-    require(status == OK and payload, f"Host jobs query failed: {status}")
-    return validate_page(json.loads(payload), after)
-
-
-def host_case(console, root, evidence):
-    data = root / "autonomous Host data"
-    stopped = True
-    try:
-        _, before = invoke(console, "status", data, "portable")
-        require(before["state"] == "unreachable", "owned Host case already has an active instance")
-        _, started = invoke(console, "start", data, "portable")
-        stopped = False
-        require(started["state"] == "running", "isolated Host did not start")
-        wire = Workspace(data, evidence)
-        initial = wire.snapshot()
-        client = (0xB1A0, 0xB1A1)
-        fixture = check_root(data / "fixtures/tiny.cut")
-        fixture.parent.mkdir(parents=True, exist_ok=True)
-        fixture.write_text(TINY, encoding="utf-8")
-        opened = wire.submit(wire.request(client, 1, initial["stamp"], "doc.open", "session://fixtures/tiny.cut"))
-        require(opened["status"] == OK, "Host did not accept the tiny synthetic document")
-        accepted = wire.submit(wire.request(client, 2, opened["stamp"], "editor.export.png", "session://exports/autonomous.png"))
-        require(accepted["status"] == ACCEPTED and accepted["task_id"], "Host did not durably admit the export")
-        target = data / "exports/autonomous.png"
-        frames_before, started_wait = len(wire.frames), time.monotonic()
-        deadline = started_wait + 20
-        # No pump, state polling, or jobs RPC is sent while the Host must work.
-        while not target.is_file() and time.monotonic() < deadline:
-            time.sleep(0.02)
-        require(target.is_file() and len(wire.frames) == frames_before, "Host required a Shell/pump/poll to produce the output")
-        file_wait_seconds = time.monotonic() - started_wait
-        rows = collect_pages(lambda after: pipe_jobs(wire, after))
-        row = next(row for row in rows if row["id"] == accepted["task_id"])
-        output = assert_output(row, target, (6, 19, 38, 255))
-        text = run([str(console), "jobs", "--mode=portable", f"--data={data}"])
-        cli = next((json.loads(line.split(" ", 1)[1]) for line in text.splitlines() if line.startswith("CUTRANS_VM_JOBS_JSON ")), None)
-        require(cli is not None and any(item["id"] == row["id"] and item["state"] == "succeeded" for item in cli["items"]),
-                "real CLI jobs does not expose the autonomous outcome")
-        _, final = invoke(console, "stop", data, "portable")
-        require(final["state"] == "stopped", "Host did not stop cleanly")
-        stopped = True
-        _, restarted = invoke(console, "start", data, "portable")
-        stopped = False
-        require(restarted["state"] == "running", "Host did not restart")
-        recovered = next(item for item in collect_pages(lambda after: pipe_jobs(wire, after)) if item["id"] == row["id"])
-        require(recovered == row and sha256(target) == output["sha256"], "Host restart changed the durable completed Job or output")
-        evidence["autonomous_host"] = {"started": started, "accepted": accepted, "job": row, "output": output,
-            "file_wait_seconds": file_wait_seconds, "rpc_frames_during_file_wait": 0,
-            "shell_attached": False, "restarted_job": recovered}
-        evidence["checks"].append("real_Host_without_Shell_exports_without_pump_or_poll_and_CLI_restart_preserves_job")
-    finally:
-        if not stopped:
-            _, cleanup = invoke(console, "stop", data, "portable")
-            require(cleanup["state"] == "stopped", "owned autonomous Host cleanup failed")
+def environment_case(console, root, evidence):
+    """The in-process job driver finishes an admitted export with no front end, and
+    a later instance reads the same durable record."""
+    data = check_root(root / "environment data")
+    # The first instance only claims the data root, so the fixture can be placed.
+    exec_script(console, data, "portable", [{"call": "stop"}], root / "claim.jsonl")
+    fixture = data / "fixtures/tiny.cut"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(TINY, encoding="utf-8")
+    output, results = exec_script(console, data, "portable", [
+        {"call": "command", "name": "doc.open", "arg": "session://fixtures/tiny.cut", "expect": OK},
+        {"call": "command", "name": "editor.export.png", "arg": "session://exports/environment.png", "expect": ACCEPTED},
+        {"call": "wait_jobs", "timeout_ms": 60000},
+        {"call": "jobs"},
+        {"call": "stop"},
+    ], root / "export.jsonl")
+    task = results[1]["task"]
+    require(task != 0, "export admission returned no job identity")
+    page = results[3]["page"]
+    item = next((entry for entry in page["items"] if entry["id"] == task), None)
+    require(item is not None and item["state"] == "succeeded", f"the environment did not finish its own export: {item}")
+    output_png = data / "exports/environment.png"
+    require(output_png.is_file() and output_png.read_bytes().startswith(b"\x89PNG"), "the export output is missing")
+    later, reread = exec_script(console, data, "portable", [{"call": "jobs"}, {"call": "stop"}], root / "reread.jsonl")
+    archived = next((entry for entry in reread[0]["page"]["items"] if entry["id"] == task), None)
+    require(archived is not None and archived["state"] == "succeeded", "the finished job record did not survive the instance")
+    require("CUTRANS_ENVIRONMENT_READY boot_id=3 abnormal_previous=0" in later, "instances did not stop and restart cleanly")
+    evidence["checks"].append("single_process_driver_finishes_export_without_front_end_and_record_survives_restart")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=default_root("jobs"))
     args = parser.parse_args()
-    require(os.name == "nt", "real DLL, file sharing and Host verification require Windows")
+    require(os.name == "nt", "real DLL, file sharing and environment verification require Windows")
     root = claim(args.root)
     portable = (OUTPUT / "portable").resolve()
     resource = portable / "runtime"
@@ -456,10 +410,10 @@ def main():
         configure(library)
         require(library.cutrans_vm_abi_version() == identity()["host_api"], "tested Runtime ABI differs from product identity")
         native_cases(library, resource, root, evidence)
-        host_case(portable / "cutrans_vm.exe", root, evidence)
+        environment_case(portable / "cutrans.exe", root, evidence)
         require(hashes(portable) == before and not (portable / "data").exists(), "verification modified the tested portable artifact")
         evidence["passed"] = True
-        print(f"CUTRANS_JOBS_VERIFY_OK checks={len(evidence['checks'])} versions=2 active_limit=8 archive=52 cancel=queued output_atomic=1 recovery=interrupted autonomous_host=1 evidence={root}")
+        print(f"CUTRANS_JOBS_VERIFY_OK checks={len(evidence['checks'])} versions=2 active_limit=8 archive=52 cancel=queued output_atomic=1 recovery=interrupted autonomous_environment=1 evidence={root}")
     except BaseException as error:
         evidence["error"] = repr(error)
         raise

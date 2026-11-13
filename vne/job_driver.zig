@@ -18,10 +18,19 @@ pub const Driver = struct {
     notified: bool = true,
     failures: u8 = 0,
     retry_at: ?std.Io.Clock.Timestamp = null,
+    /// When set, an idle driver also sweeps the queue at this interval, so
+    /// in-process callers need not notify after every admission.
+    poll_ms: ?u32 = null,
 
     /// Keep this object at the same address until deinit joins its thread.
     pub fn start(self: *Driver, io: std.Io, context: ?*anyopaque, pump: Pump) !void {
         self.* = .{ .io = io, .context = context, .pump = pump };
+        self.thread = try std.Thread.spawn(.{ .stack_size = 4 * 1024 * 1024 }, run, .{self});
+    }
+
+    /// Like `start`, plus a periodic idle sweep every `poll_ms` milliseconds.
+    pub fn startPolling(self: *Driver, io: std.Io, context: ?*anyopaque, pump: Pump, poll_ms: u32) !void {
+        self.* = .{ .io = io, .context = context, .pump = pump, .poll_ms = poll_ms };
         self.thread = try std.Thread.spawn(.{ .stack_size = 4 * 1024 * 1024 }, run, .{self});
     }
 
@@ -79,6 +88,13 @@ pub const Driver = struct {
                 self.notified = true;
             }
             if (!self.notified) {
+                if (self.poll_ms) |interval| {
+                    const deadline: std.Io.Clock.Timestamp = .fromNow(self.io, .{ .raw = .{ .nanoseconds = @as(i96, interval) * std.time.ns_per_ms }, .clock = .awake });
+                    self.changed.waitTimeout(self.io, &self.mutex, .{ .deadline = deadline }) catch {};
+                    // A pause or close that woke the wait is handled first on the next pass.
+                    self.notified = true;
+                    continue;
+                }
                 self.changed.waitUncancelable(self.io, &self.mutex);
                 continue;
             }

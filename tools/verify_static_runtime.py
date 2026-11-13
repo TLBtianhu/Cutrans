@@ -13,9 +13,8 @@ sys.dont_write_bytecode = True
 from build_paths import OUTPUT
 from verification_context import context_record
 from verification_paths import check_root, claim, default_root, remove, retain
-from verify_host import run
+from environment_harness import desktop_case, library_case, require, run
 from verify_input import hashes
-from verify_same_file import desktop_case, library_case, require
 
 
 def provider_case(console: Path, dynamic_console: Path, root: Path, evidence: dict) -> None:
@@ -37,14 +36,14 @@ def provider_case(console: Path, dynamic_console: Path, root: Path, evidence: di
 
     missing_data = check_root(root / "missing dynamic data")
     missing_runtime = check_root(root / "missing-runtime")
-    run([str(console), "start", "--mode=portable", f"--data={missing_data}",
-        f"--runtime={missing_runtime}"], expected=1)
-    require(not missing_data.exists(), "a missing explicit dynamic Pack fell back to static or created data")
+    run([str(console), "--mode=portable", f"--data={missing_data}",
+        f"--runtime={missing_runtime}", "--assets-demo"], expected=1)
+    require(not (missing_data / "session").exists(), "a missing explicit dynamic Pack fell back to static or started an instance")
     rejected_data = check_root(root / "legacy builtin data")
-    output = run([str(dynamic_console.parent / "cutrans_vm.exe"), "start", "--mode=portable",
+    output = run([str(dynamic_console.parent / "cutrans_bootstrap.exe"), "--diag", "--mode=portable",
         f"--data={rejected_data}", "--runtime=builtin"], expected=1)
-    require("StaticRuntimeUnavailable" in output and not rejected_data.exists(),
-        "the legacy dynamic entry unexpectedly accepted the builtin provider")
+    require("StaticRuntimeUnavailable" in output and not (rejected_data / "session").exists(),
+        "the headless dynamic entry unexpectedly accepted the builtin provider")
     evidence["checks"].append("explicit_dynamic_missing_does_not_fallback_and_legacy_builtin_is_rejected")
 
 
@@ -75,7 +74,7 @@ def main() -> None:
         require(not (copied / "runtime").exists() and not (copied / "data").exists(),
             "static Runtime verification recreated Runtime files or polluted portable data")
         evidence["passed"] = True
-        print("CUTRANS_STATIC_RUNTIME_VERIFY_OK runtime_dir=0 host=1 shell=1 library=1 restore=1 dynamic_fallback=1 explicit_migration=1 pack_pure=1")
+        print("CUTRANS_STATIC_RUNTIME_VERIFY_OK runtime_dir=0 single_process=1 desktop=1 library=1 restore=1 dynamic_fallback=1 explicit_migration=1 pack_pure=1")
     except BaseException as error:
         evidence["error"] = repr(error)
         raise

@@ -14,7 +14,7 @@ import automation_process
 from build_paths import OUTPUT
 from verification_context import command_args
 from verification_paths import check_root, claim, default_root, retain
-from verify_host import invoke
+from environment_harness import exec_script
 
 COMPLETE = (
     "version=3\nresolution=8x4\nfps=30\nnodes:\n"
@@ -63,8 +63,7 @@ def main() -> None:
         checks.append("line_aligned_truncation_without_output_is_refused")
 
         data = root / "data"
-        invoke(console, "start", data, "portable")
-        invoke(console, "stop", data, "portable")
+        exec_script(console, data, "portable", [{"call": "stop"}], root / "save.jsonl")
         journal = (data / "documents" / "history.txt").read_text(encoding="utf-8")
         require("dirty=0" in journal, "a completed save did not confirm a clean recovery marker")
         artifact = (data / "documents" / "session.cut").read_bytes()

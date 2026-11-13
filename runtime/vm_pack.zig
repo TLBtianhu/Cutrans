@@ -80,8 +80,8 @@ fn verifyCapabilities(manifest: Manifest) !void {
 
 fn verifyFiles(manifest: Manifest, allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !void {
     const required_paths = [_][]const u8{
-        "cutrans_vm_host.exe",
-        "cutrans_shell.exe",
+        "cutrans.exe",
+        "cutrans_bootstrap.exe",
         "config/startup.ccb",
         "assets/examples/minimal.cut",
         "assets/examples/pngtest.png",
@@ -165,8 +165,8 @@ fn prepareFiles(dir: std.Io.Dir) !void {
     try writeTestFile(dir, "config/startup.ccb", "a");
     try writeTestFile(dir, "assets/examples/minimal.cut", "b");
     try writeTestFile(dir, "assets/examples/pngtest.png", "c");
-    try writeTestFile(dir, "cutrans_vm_host.exe", "e");
-    try writeTestFile(dir, "cutrans_shell.exe", "f");
+    try writeTestFile(dir, "cutrans.exe", "e");
+    try writeTestFile(dir, "cutrans_bootstrap.exe", "f");
 }
 
 fn testManifest(files: []const PackFile, native: []const NativeDependency, required: []const []const u8) Manifest {
@@ -196,8 +196,8 @@ test "VM pack JSON and file hashes verify against real files" {
         .{ .path = "config/startup.ccb", .byteLength = 1, .sha256 = &a },
         .{ .path = "assets/examples/minimal.cut", .byteLength = 1, .sha256 = &b },
         .{ .path = "assets/examples/pngtest.png", .byteLength = 1, .sha256 = &c },
-        .{ .path = "cutrans_vm_host.exe", .byteLength = 1, .sha256 = &e },
-        .{ .path = "cutrans_shell.exe", .byteLength = 1, .sha256 = &f },
+        .{ .path = "cutrans.exe", .byteLength = 1, .sha256 = &e },
+        .{ .path = "cutrans_bootstrap.exe", .byteLength = 1, .sha256 = &f },
     };
     const no_native = [_]NativeDependency{};
     const manifest = testManifest(&files, &no_native, &required_ids);
@@ -224,8 +224,8 @@ test "VM pack rejects hash drift incompatible ABI and unknown capabilities" {
         .{ .path = "config/startup.ccb", .byteLength = 1, .sha256 = zeros },
         .{ .path = "assets/examples/minimal.cut", .byteLength = 1, .sha256 = &b },
         .{ .path = "assets/examples/pngtest.png", .byteLength = 1, .sha256 = &c },
-        .{ .path = "cutrans_vm_host.exe", .byteLength = 1, .sha256 = &e },
-        .{ .path = "cutrans_shell.exe", .byteLength = 1, .sha256 = &f },
+        .{ .path = "cutrans.exe", .byteLength = 1, .sha256 = &e },
+        .{ .path = "cutrans_bootstrap.exe", .byteLength = 1, .sha256 = &f },
     };
     const no_native = [_]NativeDependency{};
     try std.testing.expectError(error.PackFileHashMismatch, verify(testManifest(&files, &no_native, &required_ids), std.testing.allocator, std.testing.io, tmp.dir));

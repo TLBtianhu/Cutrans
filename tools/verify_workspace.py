@@ -209,7 +209,7 @@ def sequential(runtime, checks):
     sequence = 3
     for _ in range(RECEIPT_CAPACITY + 1):
         sequence += 1
-        runtime.submit(request(sequence, committed[0].stamp, "doc.save"), UNSUPPORTED, REJECTED)
+        runtime.submit(request(sequence, committed[0].stamp, "task.list"), UNSUPPORTED, REJECTED)
     runtime.submit(first_request, EXPIRED, REJECTED)
     unchanged(runtime, committed, "expired token executed the old node creation again")
     checks.append("stale_rejection_receipt_and_evicted_receipt_fail_closed")

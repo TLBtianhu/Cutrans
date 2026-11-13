@@ -35,7 +35,7 @@ pub const State = struct {
     last_frame_log_t: ?i64 = null,
     exit: @import("exit_model.zig").State,
 
-    pub fn init(process: std.process.Init, config: *const abi.ShellConfig, api: *const abi.ShellApi, hooks: *@import("shell").client.ExitHooks) !*State {
+    pub fn init(process: std.process.Init, config: *const abi.ShellConfig, api: *const abi.ShellApi, hooks: *@import("vne").environment_control.Control) !*State {
         if (config.struct_size < @sizeOf(abi.ShellConfig) or config.abi_version != abi.version or config.reserved != 0) return error.InvalidShellConfig;
         if (config.playback_frames < 0 or config.playback_frames > 600 or config.asset_workspace > 3) return error.InvalidPlaybackConfig;
         const allocator = process.gpa;
@@ -64,7 +64,6 @@ pub const State = struct {
         try vm_client.init(api);
         errdefer vm_client.deinit();
         try vm_client.register(&self.ctx);
-        vm_client.recoverPendingMarker(&self.ctx);
         self.session = try @import("vne").environment_session.establish(api);
         self.editor = editor_view.State.init(&self.ctx);
         errdefer self.editor.deinit();
@@ -74,6 +73,7 @@ pub const State = struct {
         errdefer self.files.deinit();
         self.files.on_register = .{ .context = self, .run = registerLocal };
         self.console = console_view.State.init(&self.ctx);
+        self.console.environment = hooks;
         self.library.on_insert = .{ .context = self, .run = insertLibrary };
         if (config.asset_workspace == 2) {
             if (config.open_path.len == 0) return error.MissingLocalBrowseRoot;
@@ -157,10 +157,9 @@ pub const State = struct {
         }
     }
 
-    /// Closing the window is a Shell detach, not a stop. While an explicit
-    /// environment exit is in progress, leave the window open so the exit can
-    /// finish or be resumed. A normal close starts the same safe exit; only a
-    /// finished or failed exit may actually destroy the window.
+    /// The window is the environment's front end, so closing it starts the
+    /// safe exit. While that exit is in progress the window stays open so it
+    /// can finish or be resumed; only a finished or failed exit may destroy it.
     pub const CloseAction = enum { close, block, begin_exit };
 
     pub fn closeAction(phase: @import("exit_model.zig").Phase) CloseAction {

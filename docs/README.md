@@ -6,11 +6,11 @@
 
 | 文档 | 用途 |
 | --- | --- |
-| [开始使用](guides/getting-started.md) | 便携启动、Host控制、诊断与安装边界 |
+| [开始使用](guides/getting-started.md) | 便携启动、单进程环境与安全退出、诊断与安装边界 |
 | [构建与验证](development/building.md) | 固定依赖、隐藏自动化、目标分组和产物验收 |
 | [仓库目录与归属](development/repository-layout.md) | 源码、生成物、运行数据及历史证据的位置 |
 | [命令参考](reference/commands.md) | 公开EXE动作、领域命令、VNE及录制回放 |
-| [Runtime架构](architecture/runtime.md) | 声明、应用、Host、资源、作业、帧与ABI |
+| [Runtime架构](architecture/runtime.md) | 声明、应用、单进程环境、资源、作业、帧与ABI |
 | [环境隔离](environment-isolation.md) | 数据归属、运行context、安装与清理规则 |
 | [资源操作](resource-operations.md) | CAS、重新定位／采用、驻留及通用登记 |
 | [来源身份](source-identity.md) | Win32真实身份及旧授权的显式确认 |
@@ -20,6 +20,7 @@
 
 - [项目记忆](../MEMORY.md)：宪法、主题索引和最新实施记录。
 - [现役状态](memory/current.md)：当前实现、原型限额和未完成范围。
+- [统一为单进程虚拟环境](memory/2026-11-12-single-process.md)：删除 Host 进程、RPC、重连与“未确认结果”；进程内安全退出与 Runtime 受理闸门；`exec` 调试前端；验证与未覆盖范围。
 - [参照系：FilmCraft／EffectCraft](memory/2026-11-12-artcraft-reference.md)：两者现状、架构要点、与 Cutrans 的对齐和差异以及学习路线（调研，未实施）。
 - [容量与回收（窄版）](memory/2026-11-12-capacity-reclaim.md)：`library.remove`、授权自动释放、容量错误显式化；已在本机编译并验证（DLL 命令入口与单元测试），Host/Shell 端到端与 GUI 按钮未覆盖。
 - [审计结论与进度检查点](memory/2026-11-12-audit-checkpoint.md)：全仓审计的 P0/P1/P2 清单、已修/未修、复现命令与接续顺序。
@@ -48,9 +49,9 @@
 
 | 原内容 | 维护位置 |
 | --- | --- |
-| 下载、Host与NanoUI启动 | [开始使用](guides/getting-started.md) |
+| 下载、环境实例与NanoUI启动 | [开始使用](guides/getting-started.md) |
 | bootstrap、构建、验证、安装预检 | [构建与验证](development/building.md) |
 | 分发／数据／安装规则 | [环境隔离](environment-isolation.md)，指南保留操作入口 |
-| VM／Host／Shell／资源／FrameSink／ABI | [Runtime架构](architecture/runtime.md)，细则链接现有专题 |
+| VM／环境实例／App／资源／FrameSink／ABI | [Runtime架构](architecture/runtime.md)，细则链接现有专题 |
 | 启动参数、命令与录制回放 | [命令参考](reference/commands.md) |
 | 旧验收长日志 | [历史日志标记](history/verification.md) |

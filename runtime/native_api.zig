@@ -35,7 +35,9 @@ const Runtime = struct {
     render_stopping: bool = false,
     render_worker: std.Thread,
     preview: @import("render.zig").Preview = .{},
-    shell_driver: ?*@import("vne").job_driver.Driver = null,
+    /// Closed while the environment exits: new business is refused, reads,
+    /// cleanup and the exit's own cancel/save still run.
+    admission_closed: std.atomic.Value(bool) = .init(false),
     // Private deterministic barrier for source-level concurrency tests only.
     before_compute: ?*const fn (*anyopaque) void = null,
     compute_observer: ?*anyopaque = null,
@@ -57,7 +59,7 @@ const Runtime = struct {
         self.render_work = null;
         self.render_stopping = false;
         self.preview = .{};
-        self.shell_driver = null;
+        self.admission_closed = .init(false);
         self.before_compute = null;
         self.compute_observer = null;
         self.input_recording = .{};
@@ -124,7 +126,6 @@ const Runtime = struct {
             const work = self.work.?;
             self.mutex.lockUncancelable(io_value);
             work.invoke(work.context);
-            if (self.shell_driver) |driver| if (document_commands.jobsPending(&self.ctx)) driver.notify();
             self.mutex.unlock(io_value);
             self.work_done.post(io_value);
         }
@@ -499,6 +500,7 @@ pub export fn cutrans_vm_command_result(handle: ?*anyopaque, name: abi.ByteSlice
     const runtime = from(handle) catch |err| return report(err);
     const command_name = read(name, true) catch |err| return report(err);
     const command_arg = read(arg, false) catch |err| return report(err);
+    if (!admits(runtime, command_name.?)) return abi.Status.invalid_state;
     const result = runtime.commandOnOwnedStack(command_name.?, command_arg) catch |err| return report(err);
     if (out_task_id) |out| out.* = result.task_id orelse 0;
     return commandCode(result.code);
@@ -554,6 +556,7 @@ pub export fn cutrans_vm_work_submit(handle: ?*anyopaque, request: ?*const resou
     const label = if (value.label.len == 0) "" else value.label.ptr.?[0..value.label.len];
     const body = if (value.body.len == 0) "" else value.body.ptr.?[0..value.body.len];
     const runtime = from(handle) catch |err| return report(err);
+    if (!admitsBusiness(runtime)) return abi.Status.invalid_state;
     var task = Runtime.WorkSubmitTask{ .runtime = runtime, .request = value, .label = label, .body = body };
     runtime.execute(Runtime.WorkSubmitTask, &task);
     out.* = task.result catch |err| return @import("work_requests.zig").status(err);
@@ -620,6 +623,7 @@ pub export fn cutrans_vm_resource_submit(handle: ?*anyopaque, request: ?*const r
     if (!resource_api.validProof(&value.proof)) return abi.Status.invalid_arguments;
     const path = resourcePath(value.path) catch return abi.Status.invalid_arguments;
     const runtime = from(handle) catch |err| return report(err);
+    if (!admitsBusiness(runtime)) return abi.Status.invalid_state;
     var task = Runtime.ResourceSubmitTask{ .runtime = runtime, .request = value, .path = path };
     runtime.execute(Runtime.ResourceSubmitTask, &task);
     out.* = task.result catch |err| return resource_requests.status(err);
@@ -676,6 +680,7 @@ pub export fn cutrans_vm_document_submit(handle: ?*anyopaque, request: ?*const w
     if (value.struct_size != @sizeOf(workspace.Request) or value.api_version != workspace.version) return abi.Status.abi_mismatch;
     if (value.name.len == 0 or value.name.len > 64 or value.arg.len > max_string_size) return abi.Status.invalid_arguments;
     const name = read(.{ .ptr = value.name.ptr, .len = value.name.len }, true) catch |err| return report(err);
+    if (!admits(runtime, name.?)) return abi.Status.invalid_state;
     // Workspace requests distinguish an explicit empty argument from absence.
     // Preserve that intent both for handlers and for the receipt digest.
     const arg: ?[]const u8 = if (value.arg.len == 0)
@@ -1061,6 +1066,7 @@ pub export fn cutrans_vm_asset_preview(handle: ?*anyopaque, asset_id: u64, out_i
 
 pub export fn cutrans_vm_asset_open_external(handle: ?*anyopaque, path: abi.ByteSlice, out_asset_id: ?*u64) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
+    if (!admitsBusiness(runtime)) return abi.Status.invalid_state;
     runtime.mutex.lockUncancelable(runtime.io.io());
     defer runtime.mutex.unlock(runtime.io.io());
     const external_path = read(path, true) catch |err| return report(err);
@@ -1209,104 +1215,23 @@ pub export fn cutrans_vm_preview_read(handle: ?*anyopaque, expected: u64, buffer
     return abi.Status.ok;
 }
 
-pub export fn cutrans_vm_start_shell(handle: ?*anyopaque, request: ?*const abi.ShellRequest) callconv(.c) i32 {
+/// Open or close admission of new business. The environment closes it when a
+/// safe exit begins and reopens it when the exit is resumed or fails.
+pub export fn cutrans_vm_set_admission(handle: ?*anyopaque, open: u32) callconv(.c) i32 {
     const runtime = from(handle) catch |err| return report(err);
-    const value = request orelse return abi.Status.invalid_arguments;
-    if (value.struct_size < @sizeOf(abi.ShellRequest) or value.abi_version != abi.version) return abi.Status.abi_mismatch;
-    if (value.playback_frames < 0 or value.playback_frames > 600 or value.asset_workspace > 2) return abi.Status.invalid_arguments;
-    const resource = read(value.resource_dir, true) catch |err| return report(err);
-    const open_path = read(value.open_path, false) catch |err| return report(err);
-    const record_path = read(value.record_input, false) catch |err| return report(err);
-    if (!std.fs.path.isAbsolute(resource.?)) return abi.Status.invalid_arguments;
-    const io = runtime.io.io();
-    var shell_dir = std.Io.Dir.openDirAbsolute(io, resource.?, .{}) catch |err| return report(err);
-    defer shell_dir.close(io);
-    const parsed = @import("vne").runtime_pack.verifyShellFile(allocator, io, shell_dir) catch |err| return report(err);
-    defer parsed.deinit();
-    for (parsed.value.required_capabilities) |id| {
-        if (@import("capabilities.zig").status(id) != .ready) return abi.Status.unsupported_capability;
-    }
-    {
-        runtime.mutex.lockUncancelable(io);
-        defer runtime.mutex.unlock(io);
-        if (value.asset_workspace != 2) if (open_path) |path| {
-            if (!std.fs.path.isAbsolute(path)) return abi.Status.invalid_arguments;
-            const grant_id = runtime.ctx.mounts.grantExternal(allocator, path, .read_write) catch |err| return report(err);
-            var uri_buffer: [64]u8 = undefined;
-            const uri = std.fmt.bufPrint(&uri_buffer, "external://{d}", .{grant_id}) catch return abi.Status.failed;
-            const result = runtime.ctx.command.dispatch(.{ .name = "doc.open", .arg = uri });
-            if (result.code != .ok) return commandCode(result.code);
-        };
-        if (record_path) |path| runtime.input_recording.start(&runtime.ctx, path) catch |err| return report(err);
-    }
-    const entry_path = std.fs.path.join(allocator, &.{ resource.?, parsed.value.entry }) catch |err| return report(err);
-    defer allocator.free(entry_path);
-    var library = @import("ports").library.Library.open(allocator, entry_path) catch |err| return report(err);
-    defer library.close();
-    const entry = library.lookup(abi.ShellEntry, "cutrans_shell_run") orelse return abi.Status.not_found;
-    const config = abi.ShellConfig{
-        .struct_size = @sizeOf(abi.ShellConfig),
-        .abi_version = abi.version,
-        .mode = abi.modeToInt(runtime.ctx.paths.mode),
-        .resource_dir = value.resource_dir,
-        .data_dir = slice(runtime.ctx.paths.data_dir),
-        .open_path = value.open_path,
-        .playback_frames = value.playback_frames,
-        .asset_workspace = value.asset_workspace,
-    };
-    const shell_api = abi.ShellApi{
-        .struct_size = @sizeOf(abi.ShellApi),
-        .abi_version = abi.version,
-        .context = runtime,
-        .command_result = cutrans_vm_command_result,
-        .document_fingerprint = cutrans_vm_document_fingerprint,
-        .document_flags = cutrans_vm_document_flags,
-        .document_read = cutrans_vm_document_read,
-        .pump = cutrans_vm_frame_pump,
-        .input_push = cutrans_vm_input_push,
-        .input_flush = cutrans_vm_input_flush,
-        .frame_report = cutrans_vm_frame_report,
-        .playback_report = cutrans_vm_playback_report,
-        .library_list = cutrans_vm_library_list,
-        .library_label = cutrans_vm_library_label,
-        .asset_list = cutrans_vm_asset_list,
-        .asset_source = cutrans_vm_asset_source,
-        .asset_preview = cutrans_vm_asset_preview,
-        .asset_read = cutrans_vm_asset_read,
-        .asset_open_external = cutrans_vm_asset_open_external,
-        .workspace_api = cutrans_vm_workspace_api,
-        .source_read = cutrans_vm_source_read,
-        .resource_api = cutrans_vm_resource_api,
-        .preview_info = cutrans_vm_preview_info,
-        .preview_read = cutrans_vm_preview_read,
-    };
-    var direct_jobs: @import("vne").job_driver.Driver = undefined;
-    {
-        runtime.mutex.lockUncancelable(io);
-        defer runtime.mutex.unlock(io);
-        if (runtime.shell_driver != null) return abi.Status.invalid_state;
-        direct_jobs.start(io, runtime, cutrans_vm_jobs_pump) catch |err| return report(err);
-        runtime.shell_driver = &direct_jobs;
-    }
-    defer {
-        direct_jobs.pauseAndWait();
-        runtime.mutex.lockUncancelable(io);
-        runtime.shell_driver = null;
-        runtime.mutex.unlock(io);
-        direct_jobs.deinit();
-    }
-    const status = entry(&config, &shell_api);
-    // A direct Shell owns this VM lifetime. As with Host stop, do not report
-    // clean completion while a known output outcome exists only in memory.
-    direct_jobs.pauseAndWait();
-    const jobs_status = cutrans_vm_jobs_flush(runtime);
-    runtime.mutex.lockUncancelable(io);
-    defer runtime.mutex.unlock(io);
-    if (runtime.input_recording.enabled) {
-        const report_value = runtime.input_recording.finish() catch |err| return report(err);
-        if (report_value.event_count > 0) std.debug.print("CUTRANS_INPUT_RECORD_OK events={d} time_ns={d}\n", .{ report_value.event_count, report_value.time_ns });
-    }
-    return if (jobs_status == abi.Status.ok) status else jobs_status;
+    if (open > 1) return abi.Status.invalid_arguments;
+    runtime.admission_closed.store(open == 0, .release);
+    return abi.Status.ok;
+}
+
+fn admits(runtime: *const Runtime, name: []const u8) bool {
+    if (!runtime.admission_closed.load(.acquire)) return true;
+    return @import("vne").commands.isStaleAllowed(name) or
+        std.mem.eql(u8, name, "task.cancel_all") or std.mem.eql(u8, name, "doc.save");
+}
+
+fn admitsBusiness(runtime: *const Runtime) bool {
+    return !runtime.admission_closed.load(.acquire);
 }
 
 fn testRuntime(dir: std.Io.Dir) !*Runtime {

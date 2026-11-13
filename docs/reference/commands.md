@@ -6,20 +6,19 @@
 
 | 动作／参数 | 语义 |
 | --- | --- |
-| 无动作／`desktop` | 启动或复用Host，再附着desktop |
+| 无动作／`desktop` | 在本进程运行一个环境实例与统一 NanoUI 桌面；窗口关闭即进入安全退出 |
+| `library` | 同一种环境实例，前端换成独立资源库 App（开发诊断用） |
+| `exec --script=<绝对路径>` | 无窗口运行一个环境实例，逐行执行 JSON 调用脚本并输出 `CUTRANS_EXEC {json}`；见下文 |
+| `status` | 只读输出该数据目录最后一次持久化的生命周期记录；没有可询问的后台进程 |
 | `context` | 只读输出解析后的运行context |
-| `start`／`status`／`stop`／`restart` | Host生命周期；stop先保存，失败保留实例 |
-| `jobs` | 从Host读取作业页 |
-| `attach` | 低级Shell附着 |
-| `library` | 开发诊断NanoUI候选Shell |
-| `activate-runtime --runtime=<绝对目录>` | Host停止后验证候选并提交Runtime选择 |
+| `activate-runtime --runtime=<绝对目录>／builtin` | 在没有环境实例运行时验证候选并提交Runtime选择 |
 | `--runtime=<绝对目录>／builtin` | 显式选择动态Runtime Pack，或在统一入口中选择内置静态Runtime并允许身份迁移 |
 | `--mode=development\|portable\|installed` | 必须与context声明形态一致 |
 | `--purpose=verification\|diagnostic\|replay` | 非normal用途必须显式独立data |
 | `--data=<绝对路径>` | 显式实例数据，仍受产品／形态／用途及路径边界检查 |
-| `--open <绝对路径>` | 由Host授权打开，不让路径穿过文档命令 |
-| `--shell-dir=<绝对目录>` | 显式候选Shell，成功后才提交选择 |
-| `--diag`／`--headless` | 独立诊断Runtime，不能成为现有Host第二写者 |
+| `--open <绝对路径>` | 由环境授权后打开，不让路径穿过文档命令 |
+| `--shell-dir=<绝对目录>` | 显式候选 App 载荷目录；正常停止时才提交选择 |
+| `--diag`／`--headless` | 一次性无前端Runtime诊断；与运行中的环境实例互斥 |
 | `--replay=<VNE URI>` | 在全新Session区分命令／语义输入日志回放 |
 | `--record-input=<可写VNE URI>` | 显式语义录制 |
 | `--playback=N` | 桌面／GPU就绪后播放有限静态序列，1～600帧 |
@@ -29,11 +28,29 @@
 
 `cutrans_diag.exe --inspect`只读；写入诊断使用`--verify-data-dir=<独立绝对路径>`。正常便携启动见[使用指南](../guides/getting-started.md)。模式、用途、频道及默认路径由[环境隔离](../environment-isolation.md)统一定义。
 
-## 环境退出
+## 环境实例与安全退出
 
-NanoUI 首页的“退出虚拟环境…”与窗口关闭不同：窗口关闭只离开 Shell，显式退出先停止新业务，再选择等待已有任务或协作取消，最后保存并停止 Host。退出中可以返回环境；保存失败会保留原因，修复后重试，不能显示已安全退出。草稿会持久保护，但不会替用户提交工作 revision。
+2026-11-12 起没有独立 Host 进程。每次运行 `cutrans.exe` 都是一个环境实例：同一进程持有 Runtime、导出作业线程、生命周期记录（`session/lifecycle.txt`）和前端 App。一个数据目录同一时刻只允许一个实例（`session/instance.lock`，同时持有旧版 `session/host.lock`，避免与旧版本残留的 Host 共用数据）。
 
-内部 `prepare_stop`、`cancel_jobs`、`resume_work` 是 Host 控制协议动作，不是追加到公开 EXE 的同名子命令。`--exit-demo` 仅用于隔离的隐藏 NanoUI 验证，不是普通启动方式。
+NanoUI 的“退出虚拟环境…”与窗口关闭走同一流程：先停止受理新业务（Runtime 拒绝新的命令、文档提交、资源登记和外部打开，读取、清理以及退出自身的取消和保存仍可执行），再选择等待已有任务或协作取消，最后冲刷作业终态、保存文档并记录正常停止。退出中可以返回环境；保存失败会保留原因、重新开放业务，修复后重试，不会显示已安全退出。草稿会持久保护，但不会替用户提交工作 revision。前端出错返回时，环境仍会尝试正常停止；进程被强制结束时，下一次启动报告 `abnormal_previous=1`。
+
+`--exit-demo`、`--assets-demo`、`--files-demo` 仅用于隔离的隐藏 NanoUI 验证，不是普通启动方式。
+
+### `exec` 调试脚本
+
+`exec` 每行一个 JSON 对象，`call` 取以下值；每个动作输出一行 `CUTRANS_EXEC {json}`，脚本没有 `stop` 时入口照常正常停止：
+
+| `call` | 字段 | 作用 |
+| --- | --- | --- |
+| `command` | `name`，可选 `arg`、`expect` | 执行 VM 命令；给了 `expect` 时状态不符即失败 |
+| `document` | | 输出文档指纹与规范文本 |
+| `jobs` | 可选 `after` | 输出一页作业 JSON |
+| `wait_jobs` | 可选 `timeout_ms` | 等到没有活动作业且终态已落盘 |
+| `prepare_stop`／`cancel_jobs`／`resume_work` | | 安全退出的分步动作 |
+| `stop` | | 安全退出；必须是最后一行 |
+| `crash` | | 不做收尾直接结束进程，用于异常结束验证 |
+
+调用形状刻意接近工具调用（名称＋参数），将来可直接接 MCP 的 stdio 边缘；当前不是 MCP 实现。
 
 ## VM领域命令
 
@@ -82,6 +99,6 @@ output=c1
 
 Shell 已将指针移动/按钮、语义按键、UTF-8 文本和焦点事件接入 VM，NanoUI 输入经 `consoles/gui/nanoui_input.zig` 桥接，不再依赖旧 GLFW→ImGui 栈。`runtime/input_actions.zig` 将 `Ctrl+I`、`Ctrl+Z`、`Ctrl+Y` 映射到共享的添加 invert、撤销与重做命令，文本输入状态下抑制全局动作；不支持的修饰组合不产生命令。
 
-`--record-input=<可写 VNE URI>` 可显式开启实时录制，例如 `--record-input=session://input/live.cvr`。独立桌面 Shell 通过 `input_begin/input_end` RPC 在 Host 持有的同一 Runtime 中开始和结束录制，不依赖旧的进程内 GUI。`cutrans_input_replay=3` 保存事件上下文、逐动作结果、基线文档指纹以及最终文档指纹和 History 游标；v1/v2 保持纯设备回放。当前可判定录制要求默认文档、空 History/Task 和未消费输入，尚未序列化任意会话基线，也不支持指针控件命中回放。录制包含文本，不应用于密码等敏感输入；当前不覆盖滚轮与 IME 组合状态，不注入 OS 输入，跨 OS 实机回放仍未实现。
+`--record-input=<可写 VNE URI>` 可显式开启实时录制，例如 `--record-input=session://input/live.cvr`。桌面实例在同一进程的 Runtime 上调用 `input_begin/input_end` 开始和结束录制；只读目标在窗口创建前即被拒绝。`cutrans_input_replay=3` 保存事件上下文、逐动作结果、基线文档指纹以及最终文档指纹和 History 游标；v1/v2 保持纯设备回放。当前可判定录制要求默认文档、空 History/Task 和未消费输入，尚未序列化任意会话基线，也不支持指针控件命中回放。录制包含文本，不应用于密码等敏感输入；当前不覆盖滚轮与 IME 组合状态，不注入 OS 输入，跨 OS 实机回放仍未实现。
 
 上述验证不注入真实OS输入。录制可能含文本，不用于密码或敏感输入；它不覆盖滚轮／IME组合、任意会话基线或指针控件完整命中回放。FrameSink的GPU submitted与实际屏幕呈现分账，详见[Runtime架构](../architecture/runtime.md)。

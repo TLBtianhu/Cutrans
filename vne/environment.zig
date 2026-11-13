@@ -68,6 +68,7 @@ fn contains(parent: []const u8, child: []const u8) bool {
 fn recognisedLegacy(allocator: std.mem.Allocator, io: std.Io, data_dir: []const u8) !bool {
     const signatures = [_]struct { []const u8, []const u8 }{
         .{ "session/vm-host.txt", "cutrans_vm_host=1\n" },
+        .{ "session/lifecycle.txt", "cutrans_lifecycle=1\n" },
         .{ "session/runtime.lock", "cutrans_runtime_lock=1\n" },
         .{ "documents/history.txt", "cutrans_history=1\n" },
         .{ "tasks/journal.txt", "cutrans_tasks=1\n" },

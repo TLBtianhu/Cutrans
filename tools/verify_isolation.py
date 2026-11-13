@@ -89,9 +89,14 @@ def main():
     before = hashes(OUTPUT / "portable")
     copy = root / "portable copy"
     shutil.copytree(OUTPUT / "portable", copy)
-    vm = copy / "cutrans_vm.exe"
+    vm = copy / "cutrans.exe"
+    boot = copy / "cutrans_bootstrap.exe"
     diag = copy / "cutrans_diag.exe"
-    shell = copy / "cutrans_shell.exe"
+    # One environment instance that only starts and stops; a refused launch
+    # fails while resolving its data root, before the script is read.
+    noop = root / "noop.jsonl"
+    noop.write_text('{"call": "stop"}\n', encoding="utf-8")
+    start = ["exec", f"--script={noop}"]
     base = context([vm, "context"])
     cwd = root / "unrelated workspace"; cwd.mkdir()
     (cwd / ".env").write_text("CUTRANS_DATA_DIR=must-not-be-read\nLOCALAPPDATA=must-not-be-read\n")
@@ -107,21 +112,21 @@ def main():
         raise RuntimeError("read-only inspection created application state")
     checks.append("cwd_env_dotenv_ignored_gui_cli_same_context")
     # A build staging directory is not a user's portable installation.
-    out = run([OUTPUT / "portable/cutrans_vm.exe", "start"], expected=1)
+    out = run([OUTPUT / "portable/cutrans.exe", *start], expected=1)
     if "StagingRequiresExplicitDataDirectory" not in out:
         raise RuntimeError("staging default write did not hit its explicit boundary: " + out)
     forbidden = OUTPUT / "portable" / ("forbidden-data-" + root.name)
     if forbidden.exists(): raise RuntimeError("negative staging data fixture is not new")
-    for entry, args in ((OUTPUT / "portable/cutrans_vm.exe", ["start", "--purpose=verification", f"--data={forbidden}"]),
-                        (vm, ["start", "--purpose=verification", f"--data={forbidden}"]),
+    for entry, args in ((OUTPUT / "portable/cutrans.exe", [*start, "--purpose=verification", f"--data={forbidden}"]),
+                        (vm, [*start, "--purpose=verification", f"--data={forbidden}"]),
                         (OUTPUT / "portable/cutrans_diag.exe", [f"--verify-data-dir={forbidden}"])):
         if "OverlappingResourceAndDataDirectory" not in run([entry, *args], expected=1):
             raise RuntimeError("an explicit override bypassed disposable staging boundaries")
     if forbidden.exists(): raise RuntimeError("staging rejection created runtime data")
     checks.append("staging_default_and_explicit_data_rejected")
-    for reserved in ("assets", "runtime", "shell", "nanoui-library"):
+    for reserved in ("assets", "runtime", "payload/desktop", "payload/nanoui-library"):
         forbidden = copy / reserved / "forbidden-verification-data"
-        for entry, args in ((vm, ["start", "--purpose=verification", f"--data={forbidden}"]),
+        for entry, args in ((vm, [*start, "--purpose=verification", f"--data={forbidden}"]),
                             (diag, [f"--verify-data-dir={forbidden}"])):
             if "OverlappingResourceAndDataDirectory" not in run([entry, *args], expected=1):
                 raise RuntimeError("an optional application Pack accepted runtime data: " + reserved)
@@ -129,21 +134,20 @@ def main():
     checks.append("all_optional_product_pack_data_overrides_rejected")
     installed = root / "installed layout"
     app = installed / "app"
-    shutil.copytree(copy, app, ignore=shutil.ignore_patterns("runtime", "shell", "nanoui-library"))
+    shutil.copytree(copy, app, ignore=shutil.ignore_patterns("runtime"))
     copy_installed_context(app)
-    for source_name, destination in (("runtime", "runtime-envs/default"), ("shell", "shells/desktop"), ("nanoui-library", "shells/nanoui-library")):
-        shutil.copytree(copy / source_name, installed / destination)
+    shutil.copytree(copy / "runtime", installed / "runtime-envs/default")
     installed_before = hashes(installed)
-    for reserved in ("app", "runtime-envs/default", "shells/desktop", "shells/nanoui-library"):
+    for reserved in ("app", "app/payload/desktop", "runtime-envs/default"):
         forbidden = installed / reserved / "forbidden-verification-data"
-        for entry, args in ((app / "cutrans_vm.exe", ["start", "--purpose=verification", f"--data={forbidden}"]),
+        for entry, args in ((app / "cutrans.exe", [*start, "--purpose=verification", f"--data={forbidden}"]),
                             (app / "cutrans_diag.exe", [f"--verify-data-dir={forbidden}"])):
             if "OverlappingResourceAndDataDirectory" not in run([entry, *args], expected=1):
                 raise RuntimeError("installed sibling program directory accepted runtime data: " + reserved)
-    alias = root / "shell data junction"
-    run(["cmd", "/c", "mklink", "/J", alias, installed / "shells/desktop"])
+    alias = root / "payload data junction"
+    run(["cmd", "/c", "mklink", "/J", alias, installed / "app/payload/desktop"])
     try:
-        output = run([app / "cutrans_vm.exe", "start", "--purpose=verification", f"--data={alias / 'forbidden-verification-data'}"], expected=1)
+        output = run([app / "cutrans.exe", *start, "--purpose=verification", f"--data={alias / 'forbidden-verification-data'}"], expected=1)
         if "OverlappingResourceAndDataDirectory" not in output:
             raise RuntimeError("a junction bypassed installed program-data protection: " + output)
     finally: os.rmdir(alias)
@@ -162,26 +166,25 @@ def main():
     if hashes(copy) != before:
         raise RuntimeError("diagnostic modified distribution files")
     checks.append("diagnostic_original_and_pack_unchanged")
-    data = root / "host data"
+    data = root / "environment data"
     command = lambda action, *extra: [vm, action, "--purpose=verification", f"--data={data}", *extra]
-    try:
-        run(command("start"), cwd=cwd, env=env)
-        first = run(command("status"))
-        alias = str(data).upper() + "\\..\\host data"
-        aliased = run([vm, "status", "--purpose=verification", f"--data={alias}"])
-        if "state=running" not in first or first != aliased:
-            raise RuntimeError("case/dot aliases split instance identity")
-        rejected = run([vm, "start", "--purpose=normal", f"--data={data}"], expected=1)
-        if "InstanceIdentityMismatch" not in rejected:
-            raise RuntimeError("another purpose could adopt verification state")
-        readonly = run([shell, "--purpose=verification", f"--data={data}", "--record-input=pack://forbidden.cvr"], expected=1)
-        if "CUTRANS_SHELL_PRECHECK_OK" not in readonly:
-            raise RuntimeError("the GUI entry did not reach its real Host precheck")
-        if "shell_id=" in (data / "session/runtime.lock").read_text():
-            raise RuntimeError("a failed frontend committed its selection")
-    finally:
-        run(command("stop"))
-    checks.append("canonical_identity_purpose_conflict_gui_failure_preserves_lock")
+    run([vm, *start, "--purpose=verification", f"--data={data}"], cwd=cwd, env=env)
+    first = run(command("status"))
+    alias = str(data).upper() + "\\..\\environment data"
+    aliased = run([vm, "status", "--purpose=verification", f"--data={alias}"])
+    if "state=stopped" not in first or first != aliased:
+        raise RuntimeError("case/dot aliases split instance identity")
+    rejected = run([vm, *start, "--purpose=normal", f"--data={data}"], expected=1)
+    if "InstanceIdentityMismatch" not in rejected:
+        raise RuntimeError("another purpose could adopt verification state")
+    # The read-only destination is refused after the App precheck and before any window.
+    lock_before = (data / "session/runtime.lock").read_bytes()
+    readonly = run([vm, "--purpose=verification", f"--data={data}", "--record-input=pack://forbidden.cvr"], expected=1)
+    if "CUTRANS_SHELL_PRECHECK_OK" not in readonly or "InputRecordStartFailed" not in readonly:
+        raise RuntimeError("the desktop entry did not reach its App precheck before refusing the recording")
+    if (data / "session/runtime.lock").read_bytes() != lock_before:
+        raise RuntimeError("a failed front end changed the committed selection")
+    checks.append("canonical_identity_purpose_conflict_front_end_failure_preserves_lock")
     # Activate a different verified Runtime without running the editing probe.
     # A failed candidate preserves both the selection and the saved Session.
     selected_lock = data / "session/runtime.lock"
@@ -207,10 +210,13 @@ def main():
         if "FileNotFound" not in failure or selected_lock.read_bytes() != candidate_selection:
             raise RuntimeError("failed Runtime activation changed the committed candidate: " + failure)
     finally: startup.write_bytes(startup_bytes)
-    run(activation(copy / "runtime"))
+    # The Session was created by the single-process environment, whose original
+    # selection is the built-in Runtime; roll back to exactly that.
+    run(activation("builtin"))
     after_activation = hashes(data); after_activation.pop("session/runtime.lock")
     if selected_lock.read_bytes() != old_selection or after_activation != saved_state:
-        raise RuntimeError("Runtime retry/rollback changed the saved verification Session")
+        changed = sorted(key for key in set(saved_state) | set(after_activation) if saved_state.get(key) != after_activation.get(key))
+        raise RuntimeError(f"Runtime retry/rollback changed the saved verification Session: lock_changed={selected_lock.read_bytes() != old_selection} files={changed}")
     checks.append("runtime_activation_candidate_failure_retry_preserves_session")
     # Malformed selection and an unavailable data path fail before committing a candidate.
     corrupt = root / "corrupt lock data"; fixture_identity(corrupt, base["form"], base["channel"])
@@ -223,8 +229,13 @@ def main():
     manifest = copy / "cutrans-context.json"; saved = manifest.read_bytes()
     try:
         manifest.unlink()
-        if "MissingRunContext" not in run([vm, "context"], cwd=cwd, env=env, expected=1):
-            raise RuntimeError("missing context silently chose a fallback")
+        # Since the 2026-11-10 embedded context slice a portable shape without
+        # its external file uses the executable's own portable context; it must
+        # resolve exactly the same identity, never another form or channel.
+        embedded = context([vm, "context"], cwd=cwd, env=env)
+        for field in ("product_id", "version", "channel", "form", "product_root", "services"):
+            if embedded[field] != base[field]:
+                raise RuntimeError(f"embedded context fallback changed {field}: {embedded[field]} != {base[field]}")
         record = json.loads(saved); record["services"]["updates"] = True
         manifest.write_text(json.dumps(record))
         if "UnconfiguredServiceEnabled" not in run([vm, "context"], expected=1):
@@ -233,13 +244,14 @@ def main():
     runtime_manifest = copy / "runtime/runtime-pack.json"; saved_runtime = runtime_manifest.read_bytes()
     try:
         runtime_manifest.unlink()
-        missing = run([vm, "--diag", "--purpose=verification", f"--data={root / 'missing runtime data'}"], env=env, expected=1)
+        missing = run([boot, "--diag", "--purpose=verification", f"--data={root / 'missing runtime data'}"], env=env, expected=1)
         if "RuntimePackNotFound" not in missing and "FileNotFound" not in missing:
             raise RuntimeError("missing Runtime failed outside resource resolution: " + missing)
     finally: runtime_manifest.write_bytes(saved_runtime)
     if (root / "poison homes").exists(): raise RuntimeError("a broken pack created a legacy environment home")
     checks.append("broken_context_runtime_and_service_policy_fail_closed")
-    # An actual exclusive OS lock must refuse a second Host without committing a selection.
+    # A data root still held by a Host of an older build (its exclusive
+    # host.lock) must refuse an environment without committing a selection.
     locked = root / "locked data"; fixture_identity(locked, base["form"], base["channel"])
     (locked / "session").mkdir()
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -250,11 +262,11 @@ def main():
     handle = kernel.CreateFileW(str(locked / "session/host.lock"), 0xC0000000, 0, None, 4, 0x80, None)
     if handle in (None, ctypes.c_void_p(-1).value): raise ctypes.WinError(ctypes.get_last_error())
     try:
-        output = run([copy / "cutrans_vm_host.exe", "--purpose=verification", f"--data={locked}"], expected=1)
-        if "HostAlreadyRunning" not in output or (locked / "session/runtime.lock").exists():
+        output = run([vm, *start, "--purpose=verification", f"--data={locked}"], expected=1)
+        if "EnvironmentAlreadyRunning" not in output or (locked / "session/runtime.lock").exists():
             raise RuntimeError("exclusive lock failure changed the selection: " + output)
     finally: kernel.CloseHandle(handle)
-    checks.append("exclusive_lock_blocks_second_host_without_commit")
+    checks.append("legacy_host_lock_blocks_an_environment_without_commit")
     from verification_paths import remove
     target = root / "link target"; target.mkdir(); sentinel = target / "KEEP"; sentinel.write_bytes(b"owned fixture; retain")
     link = root / "junction fixture"

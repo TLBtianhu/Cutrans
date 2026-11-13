@@ -32,7 +32,7 @@ pub extern fn cutrans_vm_source_read(handle: ?*anyopaque, uri: abi.ByteSlice, ex
 pub extern fn cutrans_vm_resource_api(handle: ?*anyopaque, out_api: ?*resource_api.Api) callconv(.c) i32;
 pub extern fn cutrans_vm_preview_info(handle: ?*anyopaque, expected: u64, out_info: ?*abi.PreviewInfo) callconv(.c) i32;
 pub extern fn cutrans_vm_preview_read(handle: ?*anyopaque, expected: u64, buffer: ?[*]u8, buffer_len: usize, out_len: ?*usize) callconv(.c) i32;
-pub extern fn cutrans_vm_start_shell(handle: ?*anyopaque, request: ?*const abi.ShellRequest) callconv(.c) i32;
+pub extern fn cutrans_vm_set_admission(handle: ?*anyopaque, open: u32) callconv(.c) i32;
 pub extern fn cutrans_vm_replay(handle: ?*anyopaque, path: abi.ByteSlice, out_report: ?*abi.ReplayReport) callconv(.c) i32;
 pub extern fn cutrans_vm_jobs_pump(handle: ?*anyopaque, out_pending: ?*u32) callconv(.c) i32;
 pub extern fn cutrans_vm_jobs_read(handle: ?*anyopaque, after_id: u64, buffer: ?[*]u8, capacity: usize, out_len: ?*usize) callconv(.c) i32;

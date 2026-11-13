@@ -15,8 +15,8 @@ REQUIRED_FILES = [
     "config/startup.ccb",
     "assets/examples/minimal.cut",
     "assets/examples/pngtest.png",
-    "cutrans_vm_host.exe",
-    "cutrans_shell.exe",
+    "cutrans.exe",
+    "cutrans_bootstrap.exe",
     "payload/desktop/payload.json",
     "payload/nanoui-library/payload.json",
 ]

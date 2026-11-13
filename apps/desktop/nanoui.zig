@@ -49,99 +49,7 @@ fn verifyExport(state: *model.State) !void {
     if (decoded.width != 1920 or decoded.height != 1080) return error.ExportDimensionsMismatch;
 }
 
-fn waitForFile(state: *model.State, path: []const u8) !void {
-    const io = state.ctx.io orelse return error.IoNotReady;
-    var attempts: usize = 0;
-    while (attempts < 300) : (attempts += 1) {
-        std.Io.Dir.cwd().access(io, path, .{}) catch {
-            std.Io.sleep(io, .{ .nanoseconds = 100 * std.time.ns_per_ms }, .awake) catch {};
-            continue;
-        };
-        return;
-    }
-    return error.ReconnectMarkerTimeout;
-}
-
-fn reconnectDemo(state: *model.State) !void {
-    const io = state.ctx.io orelse return error.IoNotReady;
-    const restarted = try std.fs.path.join(state.allocator, &.{ state.ctx.paths.data_dir, "reconnect.host-restarted" });
-    defer state.allocator.free(restarted);
-    std.debug.print("CUTRANS_RECONNECT_READY\n", .{});
-    if (std.c.getenv("CUTRANS_RECONNECT_AUTO") == null) {
-        try waitForFile(state, restarted);
-        try vm_client.reconnect(&state.ctx);
-        std.debug.print("CUTRANS_RECONNECT_OK\n", .{});
-        return;
-    }
-    const lost = try std.fs.path.join(state.allocator, &.{ state.ctx.paths.data_dir, "reconnect.host-lost" });
-    defer state.allocator.free(lost);
-    try waitForFile(state, lost);
-    vm_client.pump(&state.ctx) catch {};
-    const unknown = state.ctx.command.dispatch(.{ .name = "task.list" });
-    if (unknown.code != .not_ready) return error.UnknownCommandWasRetried;
-    std.debug.print("CUTRANS_COMMAND_UNKNOWN\n", .{});
-    std.debug.print("CUTRANS_RECONNECT_LOST_DETECTED\n", .{});
-    try waitForFile(state, restarted);
-    var attempts: usize = 0;
-    while (attempts < 300) : (attempts += 1) {
-        vm_client.pump(&state.ctx) catch {
-            std.Io.sleep(io, .{ .nanoseconds = 100 * std.time.ns_per_ms }, .awake) catch {};
-            continue;
-        };
-        std.debug.print("CUTRANS_RECONNECT_OK\n", .{});
-        return;
-    }
-    return error.AutoReconnectTimeout;
-}
-
-fn unknownResultDemo(state: *model.State) !void {
-    const io = state.ctx.io orelse return error.IoNotReady;
-    const before = state.ctx.document.count;
-    const pending = state.ctx.command.dispatch(.{ .name = "editor.invert.add" });
-    if (pending.code != .not_ready or !vm_client.hasPending()) return error.UnknownResultPendingMissing;
-    const after_lost = state.ctx.document.count;
-    if (after_lost != before + 1) return error.UnknownResultCommitNotObserved;
-    std.debug.print("CUTRANS_UNKNOWN_PENDING nodes_before={d} nodes_after={d}\n", .{ before, after_lost });
-    const restarted = try std.fs.path.join(state.allocator, &.{ state.ctx.paths.data_dir, "unknown.host-restarted" });
-    defer state.allocator.free(restarted);
-    try waitForFile(state, restarted);
-    var attempts: usize = 0;
-    while (attempts < 300) : (attempts += 1) {
-        vm_client.pump(&state.ctx) catch {};
-        if (!vm_client.hasPending()) break;
-        std.Io.sleep(io, .{ .nanoseconds = 100 * std.time.ns_per_ms }, .awake) catch {};
-    }
-    if (vm_client.hasPending()) return error.UnknownResultNotCleared;
-    if (state.ctx.document.count != after_lost) return error.UnknownResultAppliedTwice;
-    std.debug.print("CUTRANS_UNKNOWN_CLEARED status={s}\n", .{state.ctx.status.get()});
-    const recovered = state.ctx.command.dispatch(.{ .name = "editor.invert.add" });
-    if (recovered.code != .ok) return error.UnknownResultRecoveryFailed;
-    const after_recovery = state.ctx.document.count;
-    if (after_recovery != after_lost + 1) return error.UnknownResultRecoveryMiscount;
-    std.debug.print("CUTRANS_UNKNOWN_NODES after_lost={d} after_recovery={d}\n", .{ after_lost, after_recovery });
-    std.debug.print("CUTRANS_UNKNOWN_RECOVERED\n", .{});
-    std.debug.print("CUTRANS_UNKNOWN_DEMO_DONE\n", .{});
-}
-
-fn unknownResultExitDemo(state: *model.State) !void {
-    const before = state.ctx.document.count;
-    const pending = state.ctx.command.dispatch(.{ .name = "editor.invert.add" });
-    if (pending.code != .not_ready or !vm_client.hasPending()) return error.UnknownResultPendingMissing;
-    if (state.ctx.document.count != before + 1) return error.UnknownResultCommitNotObserved;
-    std.debug.print("CUTRANS_UNKNOWN_PENDING nodes_before={d} nodes_after={d}\n", .{ before, state.ctx.document.count });
-    std.debug.print("CUTRANS_UNKNOWN_EXIT_PENDING\n", .{});
-}
-
 fn verify(state: *model.State, config: *const abi.ShellConfig) !void {
-    if (std.c.getenv("CUTRANS_UNKNOWN_RESULT_EXIT") != null) {
-        try unknownResultExitDemo(state);
-        return;
-    }
-    if (std.c.getenv("CUTRANS_UNKNOWN_RESULT_DEMO") != null) {
-        try unknownResultDemo(state);
-        return;
-    }
-    if (std.c.getenv("CUTRANS_RECONNECT_DEMO") != null or std.c.getenv("CUTRANS_RECONNECT_AUTO") != null) try reconnectDemo(state);
     state.showPage(.home);
     var tester: ui.Tester = undefined;
     try tester.init(state.allocator, .init(state, model.State.view), .{
@@ -255,7 +163,7 @@ fn verify(state: *model.State, config: *const abi.ShellConfig) !void {
     _ = config;
 }
 
-fn verifyExit(state: *model.State, hooks: *@import("shell").client.ExitHooks) !void {
+fn verifyExit(state: *model.State, hooks: *@import("vne").environment_control.Control) !void {
     state.showPage(.home);
     var tester: ui.Tester = undefined;
     try tester.init(state.allocator, .init(state, model.State.view), .{
@@ -317,11 +225,11 @@ fn verifyExit(state: *model.State, hooks: *@import("shell").client.ExitHooks) !v
         tester.frame();
         try std.Io.sleep(state.ctx.io.?, .{ .nanoseconds = 5 * std.time.ns_per_ms }, .awake);
     } else return error.SafeExitTimeout;
-    if (!hooks.host_stopped) return error.HostStillRunning;
+    if (!hooks.stopped) return error.EnvironmentStillRunning;
     std.debug.print("CUTRANS_SAFE_EXIT_DRAFT_OK draft_revision={d} work_revision={d} stop_retry=1\n", .{ state.library.work.?.editor.?.draft_revision, state.library.work.?.editor.?.work_revision });
 }
 
-pub fn run(init: std.process.Init, config: *const abi.ShellConfig, api: *const abi.ShellApi, hooks: *@import("shell").client.ExitHooks) !void {
+pub fn run(init: std.process.Init, config: *const abi.ShellConfig, api: *const abi.ShellApi, hooks: *@import("vne").environment_control.Control) !void {
     const state = try model.State.init(init, config, api, hooks);
     defer state.deinit();
     std.debug.print("Cutrans VM 桌面就绪(NanoUI)\n", .{});

@@ -25,13 +25,12 @@ sys.dont_write_bytecode = True
 from build_paths import OUTPUT
 from product import identity
 from verification_paths import check_root, claim, default_root, retain
-from verify_host import invoke, run
+from environment_harness import run
 from verify_input import ByteSlice, hashes, string_slice
 from verify_jobs import (ACCEPTED, JOBS_READ, OK, SMALL, TINY, Native, collect_pages,
                          configure as jobs_configure, digest_text, png, require,
                          sha256, tiny_png)
 from verify_workspace import Outcome, request, stamp
-from verify_workspace_rpc import MAX_PAYLOAD, Pipe, Workspace
 
 INVALID_ARGUMENTS, INVALID_STATE = 3, 5
 BIG = TINY.replace("resolution=7x5", "resolution=4096x4096")
@@ -413,101 +412,6 @@ def source_ownership_case(library, resource, root, evidence):
             runtime.close()
 
 
-def pipe_jobs(wire, after=0):
-    # Workspace.rpc has value=0; paged jobs use value=after in the wire header.
-    connection = Pipe(wire.endpoint)
-    header = struct.pack("<8sIIQII", b"CUTRSH2\0", JOBS_READ, 0, after, 0, 0)
-    frame = {"kind": JOBS_READ, "request_header": header.hex(), "request_payload": ""}
-    wire.frames.append(frame)
-    try:
-        connection.write(header)
-        response = connection.read(32)
-        frame["response_header"] = response.hex()
-        magic, kind, status, value, length, reserved = struct.unpack("<8sIiQII", response)
-        require(magic == b"CUTRSR2\0" and kind == JOBS_READ and status == OK and value == reserved == 0
-                and 0 < length <= MAX_PAYLOAD, "invalid jobs RPC reply")
-        payload = connection.read(length)
-        frame["response_payload"] = payload.hex()
-        return validate_page(json.loads(payload), after)
-    finally:
-        connection.close()
-
-
-def wait_host_terminal(wire, identity):
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        row = next(item for item in collect_pages(lambda after: pipe_jobs(wire, after)) if item["id"] == identity)
-        if row["state"] in TERMINAL:
-            return row
-        threading.Event().wait(0.01)
-    raise RuntimeError("autonomous Host did not reach a terminal outcome")
-
-
-def host_retry_case(console, root, evidence):
-    data = root / "async Host data"
-    stopped = True
-    try:
-        _, before = invoke(console, "status", data, "portable")
-        require(before["state"] == "unreachable", "claimed Host case already has a running instance")
-        _, started = invoke(console, "start", data, "portable")
-        stopped = False
-        require(started["state"] == "running", "isolated async Host did not start")
-        wire, client = Workspace(data, evidence), (0xB2A0, 0xB2A1)
-        initial = wire.snapshot()
-        fixture = check_root(data / "fixtures/tiny.cut")
-        fixture.parent.mkdir(parents=True, exist_ok=True)
-        fixture.write_text(TINY, encoding="utf-8")
-        opened = wire.submit(wire.request(client, 1, initial["stamp"], "doc.open", "session://fixtures/tiny.cut"))
-        require(opened["status"] == OK, "Host tiny document was rejected")
-        blocked = check_root(data / "exports/blocked.png")
-        blocked.mkdir(parents=True)
-        sentinel = blocked / "sentinel.txt"
-        sentinel.write_text("owned directory blocks atomic replacement", encoding="utf-8")
-        accepted = wire.submit(wire.request(client, 2, opened["stamp"], "editor.export.png", "session://exports/blocked.png"))
-        require(accepted["status"] == ACCEPTED and accepted["task_id"], "Host did not accept the failure fixture")
-        parent = wait_host_terminal(wire, accepted["task_id"])
-        require(parent["state"] == "failed" and sentinel.read_text(encoding="utf-8") == "owned directory blocks atomic replacement",
-                "Host failure fixture did not preserve its original directory")
-        edited = wire.submit(wire.request(client, 3, wire.snapshot()["stamp"], "editor.gain.set", "c1 0.8"))
-        require(edited["status"] == OK, "Host current document edit was rejected")
-        token = wire.request(client, 4, edited["stamp"], "task.retry", f"{parent['id']} session://exports/retry.png")
-        child, replay = wire.submit(token), wire.submit(token)
-        require(child["status"] == replay["status"] == ACCEPTED and child["task_id"] == replay["task_id"]
-                and replay["disposition"] == 2, "Host exact retry token admitted duplicate work")
-        target, frames_before = data / "exports/retry.png", len(wire.frames)
-        deadline = time.monotonic() + 20
-        while not target.is_file() and time.monotonic() < deadline:
-            threading.Event().wait(0.01)
-        require(target.is_file() and len(wire.frames) == frames_before, "Host retry required a Shell, pump or query")
-        succeeded = wait_host_terminal(wire, child["task_id"])
-        require(succeeded["retry_of"] == parent["id"] and succeeded["attempt"] == 2
-                and succeeded["origin"] == parent["origin"] and succeeded["source_fingerprint"] == parent["source_fingerprint"],
-                "Host retry lost its original version/lineage")
-        output = assert_output(succeeded, target, (6, 19, 38, 255))
-        rows = collect_pages(lambda after: pipe_jobs(wire, after))
-        require(len(rows) == 2 and next(item for item in rows if item["id"] == parent["id"]) == parent,
-                "Host retry rewrote its parent or duplicated attempts")
-        text = run([str(console), "jobs", "--mode=portable", f"--data={data}"])
-        cli = next((json.loads(line.split(" ", 1)[1]) for line in text.splitlines() if line.startswith("CUTRANS_VM_JOBS_JSON ")), None)
-        require(cli is not None and any(item["id"] == succeeded["id"] and item["attempt"] == 2 for item in cli["items"]),
-                "real CLI jobs omitted the retried attempt")
-        _, final = invoke(console, "stop", data, "portable")
-        require(final["state"] == "stopped", "async Host did not stop cleanly")
-        stopped = True
-        _, restarted = invoke(console, "start", data, "portable")
-        stopped = False
-        require(restarted["state"] == "running", "async Host did not restart")
-        recovered = collect_pages(lambda after: pipe_jobs(wire, after))
-        require(recovered == rows and sha256(target) == output["sha256"], "Host restart changed attempts or output")
-        evidence["host_retry"] = {"parent": parent, "child": succeeded, "output": output, "restarted_jobs": recovered,
-                                  "shell_attached": False, "rpc_frames_during_file_wait": 0}
-        evidence["checks"].append("Shell_free_Host_exact_retry_runs_autonomously_and_survives_real_CLI_query_and_restart")
-    finally:
-        if not stopped:
-            _, cleanup = invoke(console, "stop", data, "portable")
-            require(cleanup["state"] == "stopped", "owned async Host cleanup failed")
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=default_root("jobs-async"))
@@ -530,7 +434,6 @@ def main():
         concurrent_cancel_case(library, resource, root, evidence)
         external_retry_case(library, resource, root, evidence)
         source_ownership_case(library, resource, root, evidence)
-        host_retry_case(portable / "cutrans_vm.exe", root, evidence)
         require(hashes(portable) == before and not (portable / "data").exists(), "verification modified the tested artifact")
         evidence["passed"] = not evidence["inconclusive"]
         label = "OK" if evidence["passed"] else "INCONCLUSIVE"

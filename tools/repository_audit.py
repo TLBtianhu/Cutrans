@@ -25,7 +25,7 @@ import automation_process
 
 ROOT = Path(__file__).resolve().parents[1]
 FIRST_PARTY = ("apps", "assets", "bootstrap", "build_support", "config", "consoles", "docs",
-    "host", "packaging", "ports", "runtime", "shell", "uikit", "vne")
+    "packaging", "ports", "runtime", "shell", "uikit", "vne")
 SKIP_DIRS = {".git", ".zig-cache", "zig-out", "zig-pkg", "scratch", "__pycache__", ".cutrans-dev"}
 NATIVE_SUFFIXES = {".exe", ".dll", ".lib", ".pdb", ".obj", ".o", ".a", ".so", ".dylib", ".pyc", ".pyo"}
 RESTORED_ROOTS = ("tools/zig", "tools/InnoSetup")

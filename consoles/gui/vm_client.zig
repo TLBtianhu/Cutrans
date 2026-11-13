@@ -68,19 +68,17 @@ const Client = struct {
     stamp: ?workspace.Stamp = null,
     pending: ?Pending = null,
     last_outcome: ?workspace.Outcome = null,
-    historical_unknown: bool = false,
     initialized: bool = false,
     mirror_errors: [4]?anyerror = @splat(error.MirrorNotInitialized),
 };
 
 var client: Client = .{};
-var reconnect_cooldown: u8 = 0;
 
 pub fn documentFresh() bool {
     return client.initialized and client.mirror_errors[@backingInt(Projection.document)] == null;
 }
 
-/// The latest settled receipt also survives an unknown-result recovery in pump.
+/// The latest settled document receipt.
 pub fn lastDocumentOutcome() ?workspace.Outcome {
     return client.last_outcome;
 }
@@ -120,13 +118,11 @@ pub fn init(api: *const abi.ShellApi) !void {
     if (api.workspace_api(api.context, &authority) != abi.Status.ok) return error.WorkspaceApiUnavailable;
     if (authority.struct_size < @sizeOf(workspace.Api) or authority.api_version != workspace.version or authority.context == null) return error.InvalidWorkspaceApi;
     client = .{ .api = api.*, .workspace_api = authority };
-    reconnect_cooldown = 0;
 }
 
 pub fn deinit() void {
     if (client.pending) |pending| pending.deinit();
     client = .{};
-    reconnect_cooldown = 0;
 }
 
 fn initWithIdentity(api: *const abi.ShellApi, identity: ClientId) !void {
@@ -226,85 +222,24 @@ fn refreshMirrors(ctx: *RuntimeContext) !void {
     if (syncMirrors(ctx)) |failure| return failure;
 }
 
-fn maybeReconnect(ctx: *RuntimeContext) void {
-    if (reconnect_cooldown > 0) {
-        reconnect_cooldown -= 1;
-        return;
-    }
-    reconnect(ctx) catch {
-        reconnect_cooldown = 30;
-        ctx.status.set("Host 不可用，等待重新连接");
-    };
-}
-
 fn allowedWhileStale(name: []const u8) bool {
     // Cleanup and stop controls must remain available after a projection fails.
     // Unrecognized future commands fail closed until the mirror is fresh.
     return vne.commands.isStaleAllowed(name);
 }
 
-fn pendingMessage(ctx: *RuntimeContext) void {
-    ctx.status.set("修改结果尚未确认，正在核对；暂不能提交新修改");
-}
-
-const pending_marker = "shell/pending-unknown.txt";
-const pending_marker_temp = "shell/pending-unknown.tmp";
-
-fn markerPath(ctx: *RuntimeContext, relative: []const u8) ![]u8 {
-    return ctx.paths.dataPath(ctx.allocator, relative);
-}
-
-fn writePendingMarker(ctx: *RuntimeContext, pending: Pending) void {
-    const io_value = ctx.io orelse return;
-    const path = markerPath(ctx, pending_marker) catch return;
-    defer ctx.allocator.free(path);
-    if (std.fs.path.dirname(path)) |directory| std.Io.Dir.cwd().createDirPath(io_value, directory) catch return;
-    var buffer: [512]u8 = undefined;
-    const text = std.fmt.bufPrint(&buffer, "cutrans-shell-pending/1\nname={s}\nsequence={d}\n", .{ pending.name, pending.sequence }) catch return;
-    const temp = markerPath(ctx, pending_marker_temp) catch return;
-    defer ctx.allocator.free(temp);
-    std.Io.Dir.cwd().writeFile(io_value, .{ .sub_path = temp, .data = text }) catch return;
-    std.Io.Dir.cwd().rename(temp, std.Io.Dir.cwd(), path, io_value) catch {
-        std.Io.Dir.cwd().deleteFile(io_value, temp) catch {};
-    };
-}
-
-fn clearPendingMarker(ctx: *RuntimeContext) void {
-    const io_value = ctx.io orelse return;
-    const path = markerPath(ctx, pending_marker) catch return;
-    defer ctx.allocator.free(path);
-    std.Io.Dir.cwd().deleteFile(io_value, path) catch {};
-    const temp = markerPath(ctx, pending_marker_temp) catch return;
-    defer ctx.allocator.free(temp);
-    std.Io.Dir.cwd().deleteFile(io_value, temp) catch {};
-}
-
-/// Restore the warning that a previous Shell incarnation left an unresolved
-/// managed request. The marker is informational: it is never replayed.
-pub fn recoverPendingMarker(ctx: *RuntimeContext) void {
-    const io_value = ctx.io orelse return;
-    const path = markerPath(ctx, pending_marker) catch return;
-    defer ctx.allocator.free(path);
-    const text = std.Io.Dir.cwd().readFileAlloc(io_value, path, ctx.allocator, .limited(512)) catch return;
-    defer ctx.allocator.free(text);
-    if (!std.mem.startsWith(u8, text, "cutrans-shell-pending/1")) {
-        clearPendingMarker(ctx);
-        return;
-    }
-    client.historical_unknown = true;
-    std.debug.print("CUTRANS_UNKNOWN_HISTORICAL\n", .{});
-    ctx.status.set("上次会话有未确认的修改，可能已执行；请核对文档后清除提示");
-}
-
-pub fn hasHistoricalUnknown() bool {
-    return client.historical_unknown;
-}
-
-pub fn acknowledgeHistoricalUnknown(ctx: *RuntimeContext) void {
-    if (!client.historical_unknown) return;
-    client.historical_unknown = false;
-    clearPendingMarker(ctx);
-    ctx.status.set("已清除上次未确认提示");
+/// The Runtime is in this process, so a refused submission did not leave an
+/// unknown result behind. Drop the request and start a fresh client identity:
+/// it holds no receipts, so a later intent can never collide with this one.
+fn refuseSubmission(ctx: *RuntimeContext, status: i32) command.Result {
+    if (client.pending) |pending| pending.deinit();
+    client.pending = null;
+    client.identity = null;
+    client.next_sequence = 1;
+    client.sequence_exhausted = false;
+    std.debug.print("CUTRANS_SHELL_DOCUMENT_SUBMIT_REFUSED status={d}\n", .{status});
+    ctx.status.set("运行时拒绝了这次修改，未执行；以刷新后的文档为准");
+    return .failure(.failed);
 }
 
 fn submitPending(ctx: *RuntimeContext) command.Result {
@@ -320,31 +255,17 @@ fn submitPending(ctx: *RuntimeContext) command.Result {
     };
     var outcome: workspace.Outcome = undefined;
     const transport = client.workspace_api.submit(client.workspace_api.context, &request, &outcome);
-    if (transport != abi.Status.ok) {
-        // There may already be a committed edit. Retain the exact request,
-        // including its old expected stamp, until a receipt answers it.
-        pendingMessage(ctx);
-        return .failure(.not_ready);
-    }
+    if (transport != abi.Status.ok) return refuseSubmission(ctx, transport);
     if (outcome.struct_size < @sizeOf(workspace.Outcome) or outcome.api_version != workspace.version or
         outcome.sequence != pending.sequence or outcome.disposition < @backingInt(workspace.Disposition.executed) or
         outcome.disposition > @backingInt(workspace.Disposition.rejected) or outcome.stamp.revision == 0 or
         (outcome.stamp.epoch_hi == 0 and outcome.stamp.epoch_lo == 0))
     {
-        pendingMessage(ctx);
-        return .failure(.not_ready);
+        return refuseSubmission(ctx, abi.Status.failed);
     }
     pending.deinit();
     client.pending = null;
     client.last_outcome = outcome;
-    const settled_unknown = outcome.status == workspace.Status.wrong_epoch or
-        outcome.status == workspace.Status.bad_sequence or outcome.status == workspace.Status.receipt_expired;
-    if (settled_unknown) {
-        // Keep the marker so a restarted Shell still warns about this request.
-        client.historical_unknown = true;
-    } else {
-        clearPendingMarker(ctx);
-    }
     const early_refusal = outcome.disposition == @backingInt(workspace.Disposition.rejected) and
         (outcome.status == abi.Status.invalid_arguments or outcome.status == workspace.Status.client_limit);
     if (outcome.status == workspace.Status.wrong_epoch or outcome.status == workspace.Status.bad_sequence or outcome.status == workspace.Status.receipt_expired) {
@@ -380,15 +301,9 @@ fn beginPending(ctx: *RuntimeContext, c: command.Command, expected: workspace.St
     errdefer ctx.allocator.free(name);
     const arg = if (c.arg) |value| try ctx.allocator.dupe(u8, value) else null;
     client.pending = .{ .allocator = ctx.allocator, .name = name, .arg = arg, .expected = expected, .sequence = client.next_sequence };
-    client.historical_unknown = false;
-    writePendingMarker(ctx, client.pending.?);
 }
 
 fn forwardManaged(ctx: *RuntimeContext, c: command.Command) command.Result {
-    if (client.pending != null) {
-        pendingMessage(ctx);
-        return .failure(.not_ready);
-    }
     // The intent belongs to the view the user acted on. A refresh may repair
     // projection health, but must never silently rebase this expected version.
     const expected = c.expected orelse client.stamp orelse return .failure(.not_ready);
@@ -398,30 +313,6 @@ fn forwardManaged(ctx: *RuntimeContext, c: command.Command) command.Result {
     const result = submitPending(ctx);
     refreshMirrors(ctx) catch {};
     return result;
-}
-
-pub fn hasPending() bool {
-    return client.pending != null;
-}
-
-/// Stop waiting for a request whose result is unknown. This never replays it
-/// and never claims a rollback: the next snapshot shows what the VM actually
-/// holds. A later edit still carries the refreshed expected stamp, so a late
-/// commit cannot be overwritten silently.
-pub fn abandonPending(ctx: *RuntimeContext) void {
-    const pending = client.pending orelse return;
-    pending.deinit();
-    client.pending = null;
-    client.identity = null;
-    client.next_sequence = 1;
-    client.sequence_exhausted = false;
-    client.historical_unknown = false;
-    clearPendingMarker(ctx);
-    refreshMirrors(ctx) catch {
-        ctx.status.set("已停止等待；Host 仍不可用，稍后刷新文档镜像");
-        return;
-    };
-    ctx.status.set("已停止等待；该修改可能已在 VM 执行，请核对文档后继续");
 }
 
 fn forward(c: command.Command, opaque_ptr: *anyopaque) command.Result {
@@ -436,19 +327,8 @@ fn forward(c: command.Command, opaque_ptr: *anyopaque) command.Result {
     // The authority's result is final for this invocation. A later read failure
     // marks the projection stale; it never retroactively fails/retries a command.
     refreshMirrors(ctx) catch {};
-    if (status == abi.Status.not_ready) ctx.status.set("Host 连接中断，命令结果无法确认；请核对文档后重试");
+    if (status == abi.Status.not_ready) ctx.status.set("运行时尚未就绪，命令未执行");
     return .{ .code = resultCode(status), .task_id = if (task_id == 0) null else task_id };
-}
-
-pub fn reconnect(ctx: *RuntimeContext) !void {
-    try @import("shell").client.reconnect();
-    if (client.pending == null) {
-        client.identity = null;
-        client.stamp = null;
-    }
-    try refreshMirrors(ctx);
-    reconnect_cooldown = 0;
-    ctx.status.set("Host 已重新连接，投影已刷新");
 }
 
 pub fn syncPlayback(ctx: *RuntimeContext) !void {
@@ -637,19 +517,10 @@ pub fn register(ctx: *RuntimeContext) !void {
 }
 
 pub fn pump(ctx: *RuntimeContext) !void {
-    if (client.pending != null) {
-        _ = submitPending(ctx);
-        if (client.pending != null) {
-            refreshMirrors(ctx) catch {};
-            return error.CommandResultUnknown;
-        }
-    }
     const status = client.api.pump(client.api.context);
     // Always retry reads, including after an execution error. Projection health
     // is reported separately and must not be mistaken for a failed task.
-    refreshMirrors(ctx) catch {
-        maybeReconnect(ctx);
-    };
+    refreshMirrors(ctx) catch {};
     if (status != abi.Status.ok) return error.TaskPumpFailed;
 }
 
@@ -1056,7 +927,7 @@ test "successful command remains successful when the document mirror fails and r
     try std.testing.expectEqual(@as(usize, 1), remote.command_calls);
 }
 
-test "transport-unknown command is not retried and reports an unknown outcome" {
+test "a not-ready command is not retried and reports that it did not run" {
     const ctx = try testContext();
     defer freeTestContext(ctx);
     var remote: MockShell = .{ .command_status = abi.Status.not_ready };
@@ -1066,7 +937,7 @@ test "transport-unknown command is not retried and reports an unknown outcome" {
     const result = forward(.{ .name = "doc.read" }, ctx);
     try std.testing.expectEqual(command.Code.not_ready, result.code);
     try std.testing.expectEqual(@as(usize, 1), remote.command_calls);
-    try std.testing.expect(std.mem.indexOf(u8, ctx.status.get(), "无法确认") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ctx.status.get(), "未执行") != null);
 }
 
 test "accepted task identity and authoritative refusal survive projection failure" {
@@ -1170,125 +1041,48 @@ test "snapshot text is bound to metadata and never publishes a mixed revision" {
     try std.testing.expectEqual(@as(u64, 2), ctx.document_revision);
 }
 
-test "unknown command result retries the exact owned request and blocks new edits" {
-    const ctx = try testContext();
-    defer freeTestContext(ctx);
-    var remote: MockShell = .{ .lose_next_response = true, .apply_gain = 0.25, .command_status = abi.Status.accepted, .task_id = 42 };
-    const api = remote.api();
-    try initWithIdentity(&api, .{ .hi = 101, .lo = 202 });
-    try refreshMirrors(ctx);
-    const viewed = client.stamp.?;
-    var arg = "c1 0.25".*;
-    const uncertain = forward(.{ .name = "editor.gain.set", .arg = &arg, .expected = viewed }, ctx);
-    try std.testing.expectEqual(command.Code.not_ready, uncertain.code);
-    try std.testing.expectEqual(@as(usize, 1), remote.command_calls);
-    try std.testing.expectEqual(@as(usize, 1), remote.submit_calls);
-    try std.testing.expect(!mirrorsFresh());
-    try std.testing.expect(client.pending.?.expected.eql(viewed));
-    try std.testing.expect(!client.stamp.?.eql(viewed));
-    @memcpy(&arg, "c1 0.99");
-    const blocked = forward(.{ .name = "editor.invert.add" }, ctx);
-    try std.testing.expectEqual(command.Code.not_ready, blocked.code);
-    try std.testing.expectEqual(@as(usize, 1), remote.submit_calls);
-    try pump(ctx);
-    try std.testing.expectEqual(@as(usize, 1), remote.command_calls);
-    try std.testing.expectEqual(@as(usize, 2), remote.submit_calls);
-    try std.testing.expectEqual(@as(u64, 1), remote.last_sequence);
-    try std.testing.expectEqual(@as(u64, 101), remote.last_client.hi);
-    try std.testing.expectEqualStrings("c1 0.25", remote.last_arg[0..remote.last_arg_len]);
-    try std.testing.expect(remote.last_expected.eql(viewed));
-    try std.testing.expect(client.pending == null);
-    try std.testing.expectEqual(@as(u64, 2), client.next_sequence);
-    try std.testing.expectEqual(@as(u64, 42), lastDocumentOutcome().?.task_id);
-    try std.testing.expect(mirrorsFresh());
-}
-
-test "invalid receipt is uncertain while an authoritative refusal is never retried" {
-    const ctx = try testContext();
-    defer freeTestContext(ctx);
-    var remote: MockShell = .{ .malformed_next_outcome = true };
-    const api = remote.api();
-    try initWithIdentity(&api, .{ .hi = 101, .lo = 202 });
-    try refreshMirrors(ctx);
-    try std.testing.expectEqual(command.Code.not_ready, forward(.{ .name = "editor.gain.set", .arg = "c1 0.25" }, ctx).code);
-    try std.testing.expect(client.pending != null);
-    try pump(ctx);
-    try std.testing.expectEqual(@as(usize, 1), remote.command_calls);
-    remote.command_status = abi.Status.permission_denied;
-    const refused = forward(.{ .name = "editor.invert.add" }, ctx);
-    try std.testing.expectEqual(command.Code.permission_denied, refused.code);
-    try std.testing.expectEqual(abi.Status.permission_denied, refused.workspace_outcome.?.status);
-    const calls = remote.submit_calls;
-    try pump(ctx);
-    try std.testing.expectEqual(calls, remote.submit_calls);
-    try std.testing.expect(client.pending == null);
-}
-
-test "stopping an unknown wait clears pending without replaying committed truth" {
+test "a refused in-process submission is dropped, never retried, and starts a fresh identity" {
     const ctx = try testContext();
     defer freeTestContext(ctx);
     var remote: MockShell = .{ .lose_next_response = true, .apply_gain = 0.25 };
     const api = remote.api();
     try initWithIdentity(&api, .{ .hi = 101, .lo = 202 });
     try refreshMirrors(ctx);
-    try std.testing.expectEqual(command.Code.not_ready, forward(.{ .name = "editor.gain.set", .arg = "c1 0.25" }, ctx).code);
-    try std.testing.expect(hasPending());
-    abandonPending(ctx);
-    try std.testing.expect(!hasPending());
+    const refusal = forward(.{ .name = "editor.gain.set", .arg = "c1 0.25" }, ctx);
+    try std.testing.expectEqual(command.Code.failed, refusal.code);
+    try std.testing.expectEqual(@as(usize, 1), remote.submit_calls);
+    try std.testing.expect(client.pending == null);
     try std.testing.expect(client.identity == null);
     try std.testing.expectEqual(@as(u64, 1), client.next_sequence);
-    const submits = remote.submit_calls;
+    try std.testing.expect(std.mem.indexOf(u8, ctx.status.get(), "未执行") != null);
+    // The refreshed projection shows what the Runtime actually holds.
+    try std.testing.expect(mirrorsFresh());
     try pump(ctx);
-    try std.testing.expectEqual(submits, remote.submit_calls);
-    // The lost reply may already describe a committed edit. Stopping the wait
-    // reveals that truth through the projection; it does not roll it back.
-    try std.testing.expectEqual(@as(f32, 0.25), ctx.document.nodes[1].value);
-    try std.testing.expect(std.mem.indexOf(u8, ctx.status.get(), "停止等待") != null);
+    try std.testing.expectEqual(@as(usize, 1), remote.submit_calls);
+    // A new explicit intent uses a new client identity from sequence 1.
+    try std.testing.expectEqual(command.Code.ok, forward(.{ .name = "editor.invert.add" }, ctx).code);
+    try std.testing.expectEqual(@as(usize, 2), remote.submit_calls);
+    try std.testing.expectEqual(@as(u64, 1), remote.last_sequence);
+    try std.testing.expect(remote.last_client.hi != 101 or remote.last_client.lo != 202);
 }
 
-test "stopping without a pending request keeps the client identity" {
+test "a malformed receipt is a refusal while an authoritative refusal keeps the identity" {
     const ctx = try testContext();
     defer freeTestContext(ctx);
-    var remote: MockShell = .{};
+    var remote: MockShell = .{ .malformed_next_outcome = true };
     const api = remote.api();
     try initWithIdentity(&api, .{ .hi = 101, .lo = 202 });
     try refreshMirrors(ctx);
-    abandonPending(ctx);
-    try std.testing.expect(!hasPending());
-    try std.testing.expectEqual(@as(u64, 101), client.identity.?.hi);
-    try std.testing.expectEqual(@as(u64, 1), client.next_sequence);
-    try std.testing.expectEqual(@as(usize, 0), remote.submit_calls);
-}
-
-test "pending marker survives a shell restart until acknowledged" {
-    const ctx = try testContext();
-    defer freeTestContext(ctx);
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const data_root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
-    defer std.testing.allocator.free(data_root);
-    ctx.paths = try vne.paths.Paths.fromDirs(std.testing.allocator, .portable, "C:/cutrans-test-resource", data_root);
-    var remote: MockShell = .{ .lose_next_response = true };
-    const api = remote.api();
-    try initWithIdentity(&api, .{ .hi = 101, .lo = 202 });
-    try refreshMirrors(ctx);
-    _ = forward(.{ .name = "editor.gain.set", .arg = "c1 0.25" }, ctx);
-    try std.testing.expect(hasPending());
-    const marker = try ctx.paths.dataPath(std.testing.allocator, "shell/pending-unknown.txt");
-    defer std.testing.allocator.free(marker);
-    try std.Io.Dir.cwd().access(std.testing.io, marker, .{});
-    // Simulate a Shell exit without resolving: the next incarnation must warn
-    // but must not replay the old request.
-    deinit();
-    var next_remote: MockShell = .{};
-    const next_api = next_remote.api();
-    try initWithIdentity(&next_api, .{ .hi = 303, .lo = 404 });
-    try refreshMirrors(ctx);
-    recoverPendingMarker(ctx);
-    try std.testing.expect(hasHistoricalUnknown());
-    acknowledgeHistoricalUnknown(ctx);
-    try std.testing.expect(!hasHistoricalUnknown());
-    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, marker, .{}));
+    try std.testing.expectEqual(command.Code.failed, forward(.{ .name = "editor.gain.set", .arg = "c1 0.25" }, ctx).code);
+    try std.testing.expect(client.pending == null);
+    remote.command_status = abi.Status.permission_denied;
+    const refused_result = forward(.{ .name = "editor.invert.add" }, ctx);
+    try std.testing.expectEqual(command.Code.permission_denied, refused_result.code);
+    try std.testing.expectEqual(abi.Status.permission_denied, refused_result.workspace_outcome.?.status);
+    const calls = remote.submit_calls;
+    try pump(ctx);
+    try std.testing.expectEqual(calls, remote.submit_calls);
+    try std.testing.expect(client.pending == null);
 }
 
 test "queued stale intent keeps its original expected stamp and receives a refusal" {
@@ -1386,24 +1180,6 @@ test "oversized managed arguments are rejected before pending and do not block l
     try std.testing.expectEqual(command.Code.ok, forward(.{ .name = "editor.invert.add" }, ctx).code);
     try std.testing.expectEqual(@as(usize, 1), remote.submit_calls);
     try std.testing.expectEqual(@as(u64, 1), remote.last_sequence);
-}
-
-test "pending document request blocks external import even when projection reads recover" {
-    const ctx = try testContext();
-    defer freeTestContext(ctx);
-    var remote: MockShell = .{ .lose_next_response = true };
-    const api = remote.api();
-    try initWithIdentity(&api, .{ .hi = 101, .lo = 202 });
-    try refreshMirrors(ctx);
-    _ = forward(.{ .name = "editor.gain.set", .arg = "c1 0.25" }, ctx);
-    try std.testing.expect(client.pending != null);
-    try std.testing.expectError(error.StaleMirror, openExternal(ctx, "C:/verification/example.png"));
-    try std.testing.expectEqual(@as(usize, 0), remote.external_calls);
-    try std.testing.expectEqual(@as(usize, 1), remote.submit_calls);
-    try pump(ctx);
-    try std.testing.expect(client.pending == null);
-    try std.testing.expectEqual(@as(u64, 37), try openExternal(ctx, "C:/verification/example.png"));
-    try std.testing.expectEqual(@as(usize, 1), remote.external_calls);
 }
 
 fn sourceTestPng(pixel: [4]u8) [73]u8 {

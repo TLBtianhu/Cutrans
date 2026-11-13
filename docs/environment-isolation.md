@@ -40,12 +40,9 @@ Pack 的 `pack://` 是只读输入；Session、持久资源库、可重建缓存
 
 | 真实入口 | 上下文及行为 |
 | --- | --- |
-| `cutrans.exe` | 统一控制器与独立 Host／NanoUI 角色；默认静态 Runtime 与 `payload/`，旧 Shell Pack 仅显式回退，缺失或损坏 Payload 不隐式回退 |
-| `cutrans_vm.exe` | console `context/start/status/stop/restart/desktop/library/activate-runtime`；共享 bootstrap 解析 |
-| `cutrans_bootstrap.exe` | headless、诊断与回放；共享同一解析，写入必须显式独立数据 |
-| `cutrans_vm_host.exe` | 独立后台 Host；相同实例标记、规范路径、锁与 Runtime 校验 |
-| `cutrans_shell.exe`、`cutrans_library_nanoui.exe` | 附着同一 Host；先校验 Shell，成功后才提交选择；启动子进程固定 cwd 为程序目录 |
-| `cutrans_shell.exe`、`cutrans_library_nanoui.exe`、Runtime DLL | Shell 经显式绝对 Pack 路径和 ABI 配置进入；Runtime DLL 搜索只允许所选目录及 System32 |
+| `cutrans.exe` | 唯一公开入口；一个进程就是一个环境实例（Runtime、作业线程、生命周期记录与 App）。默认静态 Runtime 与 `payload/`，缺失时用内嵌副本；显式或损坏的 Payload 不隐式回退。`session/instance.lock`（并持有旧 `session/host.lock`）保证一个数据目录只有一个实例；`exec`、`status`、`context`、`activate-runtime` 共享同一解析 |
+| `cutrans_bootstrap.exe` | 无界面：headless、诊断与回放，使用动态 Runtime Pack；共享同一解析，写入必须显式独立数据；不能运行桌面 |
+| Runtime DLL | 仅供动态 Runtime Pack 与 ctypes 验证；搜索只允许所选目录及 System32 |
 | `cutrans_diag.exe` | `--inspect` 只读；写入探针强制 `--verify-data-dir`，验证 Pack 后才建独立实例，不写 Pack 或外部原件 |
 | Web、更新器、账号与遥测 | 当前没有单独产品 Web/更新/账号/遥测入口；NanoUI 关闭 WebView2 和隐式 KV。context 启用未配置服务会被拒绝 |
 | 安装器、生成卸载器 | 产品声明生成身份；先核验所有权、真实路径、进程状态并备份要改的登记和快捷方式 |
@@ -56,7 +53,7 @@ Pack 的 `pack://` 是只读输入；Session、持久资源库、可重建缓存
 
 ## 安装、重试与失败
 
-安装前后诊断各用安装器专属临时数据，不允许把 `VerifyDataDir` 指到真实会话。安装前完整校验提取出的实际资产；失败停止在复制和登记之前。已有安装必须同根且归当前登记所有，先正常保存并停止 Host，再确认相关进程退出。找不到控制入口不会假装已经停止。
+安装前后诊断各用安装器专属临时数据，不允许把 `VerifyDataDir` 指到真实会话。安装前完整校验提取出的实际资产；失败停止在复制和登记之前。已有安装必须同根且归当前登记所有，并且本安装没有正在运行的 Cutrans 进程；仍在运行时安装器中止并提示用户先在应用内安全退出，不会替用户结束进程。
 
 当前只接受完全相同程序资产的幂等重装。变更资产升级没有已验收的文件／登记／Runtime 选择整体回滚事务，故在复制前拒绝；不能称为已支持无损升级。显式 Runtime 激活先校验候选、创建和握手成功后再提交选择，失败保留原锁，允许修复后重试。该动作可能按现有恢复语义标记中断任务，不是任意用户数据上的只读操作。
 

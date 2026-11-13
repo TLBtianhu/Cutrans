@@ -27,4 +27,5 @@ pub const frame = @import("frame.zig");
 pub const playback = @import("playback.zig");
 pub const assets = @import("assets.zig");
 pub const library = @import("library.zig");
-pub const host_protocol = @import("host_protocol.zig");
+pub const lifecycle = @import("lifecycle.zig");
+pub const environment_control = @import("environment_control.zig");

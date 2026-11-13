@@ -1,11 +1,11 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
-const shell = @import("shell");
+const Control = @import("vne").environment_control.Control;
 
 pub const Phase = enum { inactive, confirm, waiting, cancelling, ready, stopping, failed, stopped };
 
 pub const State = struct {
-    hooks: *shell.client.ExitHooks,
+    hooks: *Control,
     phase: Phase = .inactive,
     active_count: usize = 0,
     record_pending: bool = false,
@@ -36,7 +36,7 @@ pub const State = struct {
         self.last_error = null;
         if (library.work) |*work| if (!work.beforeClose()) return error.WorkEditPending;
         self.phase = .confirm;
-        _ = self.hooks.prepareStop() catch |err| {
+        self.hooks.prepareStop() catch |err| {
             self.phase = .inactive;
             return err;
         };
@@ -53,14 +53,14 @@ pub const State = struct {
 
     pub fn cancelJobs(self: *State) !void {
         if (self.phase != .confirm and self.phase != .waiting) return error.InvalidExitState;
-        _ = try self.hooks.cancelJobs();
+        try self.hooks.cancelJobs();
         self.phase = .cancelling;
         std.debug.print("CUTRANS_EXIT_CANCEL_REQUESTED\n", .{});
     }
 
     pub fn resume_work(self: *State) !void {
         if (self.phase != .confirm and self.phase != .waiting and self.phase != .cancelling) return error.InvalidExitState;
-        _ = try self.hooks.resume_work();
+        try self.hooks.resumeWork();
         self.phase = .inactive;
         self.last_error = null;
         std.debug.print("CUTRANS_EXIT_RESUME_OK\n", .{});
@@ -68,7 +68,7 @@ pub const State = struct {
 
     fn finish(self: *State) void {
         self.phase = .stopping;
-        _ = self.hooks.stop() catch |err| {
+        self.hooks.stopEnvironment() catch |err| {
             self.fail(err);
             return;
         };
@@ -102,7 +102,7 @@ pub const State = struct {
         ui.column(c, .{ .width = .fill, .height = .fill, .padding = .all(28), .gap = 14 });
         defer ui.end(c);
         ui.text(c, "退出虚拟环境", .{ .size = 26, .weight = .bold });
-        ui.label(c, "窗口关闭只离开 Shell；这里会停止新业务、处理任务并保存后停止 Host。");
+        ui.label(c, "这里会停止新业务、处理任务、保存文档，然后结束整个虚拟环境。");
         switch (self.phase) {
             .inactive => {},
             .confirm => {
@@ -116,10 +116,10 @@ pub const State = struct {
                 ui.label(c, if (self.phase == .waiting) "正在等待已有任务完成；不再接受新业务。" else "已请求协作取消；不会强制中断编码器或系统调用。");
                 if (ui.button(c, "返回环境", .{}).clicked) self.resume_work() catch |err| self.noteError(err);
             },
-            .ready, .stopping => ui.label(c, "正在保存文档、冲刷任务结果并停止 Host…"),
+            .ready, .stopping => ui.label(c, "正在保存文档、冲刷任务结果并结束虚拟环境…"),
             .failed => {
-                ui.textf(c, .{ .color = c.theme.danger }, "安全退出未完成：{s}", .{self.last_error orelse "HostStopFailed"});
-                ui.label(c, "Host 保留当前状态；修复原因后可重试，或仅关闭窗口。");
+                ui.textf(c, .{ .color = c.theme.danger }, "安全退出未完成：{s}", .{self.last_error orelse "EnvironmentStopFailed"});
+                ui.label(c, "环境仍在运行；修复原因后可重试。仅关闭窗口时下次启动会按异常结束恢复。");
                 if (ui.button(c, "重试安全退出", .{ .variant = .primary }).clicked) self.retry();
                 if (ui.button(c, "仅关闭窗口", .{}).clicked) c.close_request = true;
                 c.changed = true;

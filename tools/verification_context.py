@@ -10,10 +10,7 @@ from build_paths import OUTPUT
 from product import identity
 from verification_paths import check_root, ensure_owned_data
 
-APPLICATIONS = frozenset({
-    "cutrans.exe", "cutrans_vm.exe", "cutrans_bootstrap.exe", "cutrans_vm_host.exe",
-    "cutrans_shell.exe", "cutrans_diag.exe", "cutrans_library_nanoui.exe",
-})
+APPLICATIONS = frozenset({"cutrans.exe", "cutrans_bootstrap.exe", "cutrans_diag.exe"})
 
 
 def command_args(command: list[str]) -> list[str]:

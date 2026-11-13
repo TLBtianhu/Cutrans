@@ -10,16 +10,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # A layer may import lower/shared layers, but never reach across this table.
 FORBIDDEN = {
-    "vne": ("runtime", "host", "bootstrap", "apps", "shell", "consoles"),
-    "runtime": ("host", "bootstrap", "apps", "nanoui", "consoles"),
-    "apps": ("runtime", "host", "bootstrap"),
-    "shell": ("runtime", "host", "bootstrap"),
-    "host": ("apps", "nanoui", "bootstrap"),
+    "vne": ("runtime", "bootstrap", "apps", "shell", "consoles"),
+    "runtime": ("bootstrap", "apps", "nanoui", "consoles"),
+    "apps": ("runtime", "bootstrap"),
+    "shell": ("runtime", "bootstrap"),
     "bootstrap": ("apps", "nanoui"),
 }
 FILE_FORBIDDEN = {
-    "consoles/gui/vm_client.zig": ("runtime", "host", "bootstrap"),
-    "consoles/cli/nanoui.zig": ("runtime", "host", "bootstrap"),
+    "consoles/gui/vm_client.zig": ("runtime", "bootstrap"),
+    "consoles/cli/nanoui.zig": ("runtime", "bootstrap"),
 }
 IMPORT = re.compile(r'@import\("([^"]+)"\)')
 

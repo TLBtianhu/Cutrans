@@ -1,11 +1,10 @@
 pub const payload_blob = @import("payload_blob");
 pub const main = @import("main.zig").main;
-pub const runHost = @import("main.zig").runHost;
-pub const runShell = @import("main.zig").runShell;
-pub const runAttached = @import("main.zig").runAttached;
-pub const AttachedShell = @import("main.zig").AttachedShell;
-pub const roles = @import("roles.zig");
+pub const Apps = @import("main.zig").Apps;
+pub const AppRun = @import("main.zig").AppRun;
+pub const instance = @import("instance.zig");
 
 test {
-    _ = roles;
+    _ = @import("main.zig");
+    _ = instance;
 }

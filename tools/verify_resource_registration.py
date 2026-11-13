@@ -23,18 +23,32 @@ from product import identity
 from verification_paths import check_root, claim, default_root, retain
 from verify_assets import AssetInfo, AssetListReport, read_buffer
 from verify_edit_commit import exclusive_file
-from verify_host import invoke, run
+from environment_harness import run
 from verify_input import hashes, string_slice
 from verify_jobs import ACCEPTED, FAILED, OK, require, tiny_png
 from verify_resident_resources import station, station_report
-from verify_resource_operations import (CANDIDATE_CHANGED, RESOURCE_API_VERSION, WRONG_EPOCH,
-    Native, Outcome, ProbeRequest, Proof, configure, host_apply, host_request,
-    host_view, known, preserve, request, resource_files, unpack_proof)
-from verify_resource_versions import (COLOR_A, assert_output, assert_projection,
-    document_state, history_bytes, host_asset_bytes, host_legacy, host_rpc,
-    retained_files, row)
+from verify_resource_operations import (
+    CANDIDATE_CHANGED,
+    RESOURCE_API_VERSION,
+    WRONG_EPOCH,
+    Native,
+    Outcome,
+    ProbeRequest,
+    Proof,
+    configure,
+    known,
+    preserve,
+    request,
+    resource_files)
+from verify_resource_versions import (
+    COLOR_A,
+    assert_output,
+    assert_projection,
+    document_state,
+    history_bytes,
+    retained_files,
+    row)
 from verify_workspace import Stamp
-from verify_workspace_rpc import Workspace
 
 REGISTER, DENIED, INVALID, ABI_MISMATCH = 3, 4, 3, 11
 TEXT = "Cutrans ordinary source: 文本不是图片。\nSecond line.\n".encode("utf-8")
@@ -330,7 +344,7 @@ def native_boundaries(dll, runtime_dir, root, evidence):
         managed.write_bytes(TEXT)
         before, files = runtime.view(), resource_files(runtime.data)
         for path in (managed, alternate / "assets/examples/pngtest.png", runtime_dir / "cutrans_vm_runtime.dll",
-                     runtime_dir.parent / "cutrans_vm.exe"):
+                     runtime_dir.parent / "cutrans.exe"):
             require(path.is_file(), f"managed boundary fixture is absent: {path}")
             runtime.probe(path, REGISTER, 0, status=DENIED)
         link = junction(case / "alias-to-managed", target)
@@ -394,132 +408,6 @@ def native_versions(dll, runtime_dir, root, evidence):
         runtime.close()
 
 
-def host_station(wire):
-    status, value, payload = host_rpc(wire, 12)
-    require(status == value == 0 and len(payload) == c.sizeof(AssetListReport), "Host returned an invalid Station report")
-    return station_report(AssetListReport.from_buffer_copy(payload))
-
-
-def host_probe_register(wire, path, expected=OK, version=RESOURCE_API_VERSION):
-    before = host_view(wire)
-    encoded = str(path).encode("utf-8")
-    status, value, payload = host_rpc(wire, 27, struct.pack("<IIQQQQII", version, REGISTER,
-        *before["stamp"], 0, len(encoded), 0) + encoded)
-    require(status == expected and value == 0, f"Host register probe={status}, expected={expected}")
-    if expected != OK:
-        require(not payload, "rejected Host registration probe returned a proof")
-        return None
-    proof = unpack_proof(payload)
-    require(proof.target_id == 0 and proof.mode == REGISTER and not any(proof.head_hash)
-        and (proof.stamp.epoch_hi, proof.stamp.epoch_lo, proof.stamp.revision) == before["stamp"],
-        "Host registration proof was not bound to its exact catalog observation")
-    return proof
-
-
-def host_acquire(wire, rid, content):
-    host_legacy(wire, "resource.acquire", f"{rid} {sha(content)}", ACCEPTED)
-    matches = [handle for handle, item in host_station(wire)[1].items()
-        if item["library_id"] == rid and item["hash"] == sha(content)]
-    require(len(matches) == 1 and host_asset_bytes(wire, matches[0]) == content,
-        "Host generic acquisition did not deliver exact complete ResourceRef bytes")
-    before = host_station(wire)
-    host_legacy(wire, "resource.acquire", f"{rid} {sha(content)}", ACCEPTED)
-    require(host_station(wire) == before, "Host repeated acquisition accumulated leases")
-    return matches[0]
-
-
-def host_case(console, root, evidence):
-    case = check_root(root / "Host")
-    case.mkdir()
-    text_dir = check_root(case / "主机 中文目录")
-    text_dir.mkdir()
-    sources = [(text_dir / "普通 文件.txt", TEXT), (case / "image.png", tiny_png(COLOR_A)),
-        (case / "unknown.blob", UNKNOWN), (case / "empty-file.bin", b"")]
-    for path, content in sources:
-        path.write_bytes(content)
-    data, stopped = case / "data", True
-    refs, old_epoch = [], None
-    try:
-        stopped = False
-        _, started = invoke(console, "start", data, "portable")
-        require(started["state"] == "running" and started["abi"] == identity()["host_api"], "isolated registration Host did not start")
-        wire = Workspace(data, evidence)
-        for index, (path, content) in enumerate(sources, 1):
-            before, files = host_view(wire), resource_files(data)
-            host_probe_register(wire, path, INVALID, version=1)
-            require(host_view(wire) == before and resource_files(data) == files, "v1 Host probe mutated state")
-            proof = host_probe_register(wire, path)
-            require(bytes(proof.content_hash).hex() == sha(content) and proof.byte_length == len(content),
-                "Host register proof changed ordinary bytes")
-            operation = host_request(proof, path, (0xC2C204, index))
-            v1 = bytearray(operation)
-            struct.pack_into("<I", v1, 0, 1)
-            status, value, body = host_rpc(wire, 28, bytes(v1))
-            require(status == INVALID and value == 0 and not body and host_view(wire) == before
-                and resource_files(data) == files, "v1 Host submit mutated state or returned a fake known result")
-            # A complete settled response header, followed by a deliberately
-            # lost body, models a caller with no Outcome rather than a retry
-            # that happened to arrive before the first admission.
-            host_apply(wire, operation, discard=True)
-            result = host_apply(wire, operation)
-            after = host_view(wire)
-            require(result["disposition"] == 2 and result["resource_id"] > 0
-                and result["resource_id"] == before["body"]["next_id"]
-                and result["stamp"] == (*before["stamp"][:2], before["stamp"][2] + 1)
-                and len(after["body"]["resources"]) == len(before["body"]["resources"]) + 1,
-                "lost registration Outcome or earlier v1 refusal created a duplicate ID/consumed the sequence")
-            rid = result["resource_id"]
-            assert_reference(after, rid, content, path)
-            declarations = resource_files(data)
-            require(host_apply(wire, operation) == result and host_view(wire) == after
-                and resource_files(data) == declarations, "Host repeated registration changed declarations")
-            handle = host_acquire(wire, rid, content)
-            doc, before_station = wire.snapshot(), host_station(wire)
-            status, value, body = host_rpc(wire, 14, identity=handle)
-            if index == 2:
-                require(status == OK and value == 0 and len(body) == c.sizeof(AssetInfo), "PNG consumer did not accept a generically registered PNG")
-                info = AssetInfo.from_buffer_copy(body)
-                require(info.struct_size == c.sizeof(AssetInfo) and info.abi_version == identity()["host_api"]
-                    and info.handle == handle and bytes(info.content_hash).hex() == sha(content)
-                    and info.width == info.height == 1 and info.media_kind == info.coverage == 1 and info.reserved == 0,
-                    "PNG consumer metadata does not match the delivered ResourceRef")
-            else:
-                require(status == FAILED and value == 0 and not body, "Host image consumer accepted non-image bytes")
-                outcome = wire.submit(wire.request((0xC2C205, index), 1, doc["stamp"], "editor.asset.insert", str(handle)))
-                require(outcome["status"] == FAILED and outcome["task_id"] == outcome["created_id"] == 0
-                    and wire.snapshot() == doc and host_view(wire) == after and host_station(wire) == before_station,
-                    "Host consumer refusal changed resource/catalog/document/leases")
-            require(wire.snapshot() == doc and host_view(wire) == after and host_station(wire) == before_station
-                and host_asset_bytes(wire, handle) == content,
-                "Host consumer support probe mutated document, ResourceRef, bytes or Station ownership")
-            refs.append((rid, path, content))
-            old_epoch = operation
-        require(not retained_files(data), "Host registration/consumer rejection copied reference bytes to permanent versions")
-        evidence["checks"].append("Host_v4_register_lost_reply_exact_token_replay_generic_delivery_and_independent_PNG_consumer_support")
-        evidence["checks"].append("Host_v1_resource_probe_submit_rejected_without_side_effect_or_sequence_consumption")
-        body = host_view(wire)["body"]
-        _, final = invoke(console, "stop", data, "portable")
-        require(final["state"] == "stopped", "registration Host did not stop")
-        stopped = True
-        stopped = False
-        _, started = invoke(console, "start", data, "portable")
-        require(started["state"] == "running", "registration Host did not cold restart")
-        require(host_view(wire)["body"] == body and not host_station(wire)[1], "cold Host lost generic catalog or restored transient leases")
-        rejected = host_apply(wire, old_epoch, WRONG_EPOCH)
-        require(rejected["disposition"] == 3 and rejected["resource_id"] == 0 and host_view(wire)["body"] == body,
-            "old Host incarnation registration created another resource")
-        for rid, path, content in refs:
-            host_acquire(wire, rid, content)
-            require(path.read_bytes() == content, "Host cold delivery modified a source")
-        evidence["checks"].append("Host_cold_restore_retains_generic_resource_IDs_and_read_only_bytes_without_restoring_Station")
-    finally:
-        if not stopped:
-            _, final = invoke(console, "stop", data, "portable")
-            require(final["state"] == "stopped", "owned registration Host cleanup failed")
-            stopped = True
-        evidence["host_stopped"] = stopped
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=default_root("resource-registration"))
@@ -544,7 +432,6 @@ def main():
         native_failures(dll, portable / "runtime", root, evidence)
         native_boundaries(dll, portable / "runtime", root, evidence)
         native_versions(dll, portable / "runtime", root, evidence)
-        host_case(portable / "cutrans_vm.exe", root, evidence)
         require(hashes(portable) == before and not (portable / "data").exists(), "registration verification mutated tested artifacts/runtime data")
         evidence["passed"] = True
         print(f"CUTRANS_RESOURCE_REGISTRATION_VERIFY_OK checks={len(evidence['checks'])} evidence={root}")

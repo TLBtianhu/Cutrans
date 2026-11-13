@@ -221,22 +221,19 @@ def _verify(runtime_dir: Path, bootstrap: Path, mode: str, root: Path) -> None:
     output = run([str(bootstrap), f"--mode={mode}", f"--data={replay_data}", "--replay=session://input/bridge.cvr"])
     if "kind=1 events=50 input_events=50" not in output or f"fingerprint={expected_fingerprint}" not in output or "history=1" not in output or "history_cursor=1" not in output:
         raise RuntimeError("a fresh Runtime did not reproduce the recorded document and History state")
-    console = bootstrap.parent / "cutrans_vm.exe"
-    shell = bootstrap.parent / "cutrans_shell.exe"
+    console = bootstrap.parent / "cutrans.exe"
     reject_data = root / "reject shell data"
-    run([str(console), "start", f"--mode={mode}", f"--data={reject_data}"])
-    try:
-        output = run([str(bootstrap), f"--mode={mode}", f"--data={reject_data}", "--record-input=pack://input/forbidden.cvr"])
-        if "CUTRANS_VM_ATTACH_ACCEPTED shell=desktop" not in output or "HostAlreadyRunning" in output:
-            raise RuntimeError("the default entry created a second Runtime instead of attaching the desktop")
-        output = run([str(shell), f"--mode={mode}", f"--data={reject_data}", "--record-input=pack://input/forbidden.cvr"], expected=1)
-        if "CUTRANS_INPUT_BEGIN_FAIL" not in output:
-            raise RuntimeError("the attached desktop did not forward the recording destination to the VM")
-        if "shell_id=" in (reject_data / "session/runtime.lock").read_text(encoding="utf-8"):
-            raise RuntimeError("a read-only recording failure committed a Shell selection")
-        print("CUTRANS_DEFAULT_ENTRY_OK attach=1 second_runtime=0 readonly=1")
-    finally:
-        run([str(console), "stop", f"--mode={mode}", f"--data={reject_data}"])
+    output = run([str(bootstrap), f"--mode={mode}", f"--data={reject_data}", "--record-input=pack://input/forbidden.cvr"], expected=1)
+    if "AppUnavailableInThisExecutable" not in output:
+        raise RuntimeError("the headless entry tried to run a desktop front end")
+    # The read-only destination is refused before any window exists.
+    output = run([str(console), f"--mode={mode}", f"--data={reject_data}", "--record-input=pack://input/forbidden.cvr"], expected=1)
+    if "InputRecordStartFailed" not in output:
+        raise RuntimeError("the environment did not refuse a read-only recording destination")
+    lock = reject_data / "session/runtime.lock"
+    if lock.exists() and "shell_id=" in lock.read_text(encoding="utf-8"):
+        raise RuntimeError("a read-only recording failure committed an App selection")
+    print("CUTRANS_DEFAULT_ENTRY_OK single_process=1 headless_desktop=0 readonly=1")
     run([str(bootstrap), "--headless", "--record-input=session://input/conflict.cvr"], expected=1)
     if hashes(runtime_dir) != before or (runtime_dir / "data").exists():
         raise RuntimeError("input verification modified the Runtime Pack")

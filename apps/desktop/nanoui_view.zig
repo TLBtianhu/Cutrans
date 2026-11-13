@@ -55,7 +55,7 @@ fn home(state: *model.State, c: *ui.Context) void {
         {
             defer ui.end(c);
             ui.text(c, "统一工作流", .{ .size = 18, .weight = .semibold });
-            ui.label(c, "选择资源 → 编辑预览 → 导出任务 → 关闭 Shell 后继续。");
+            ui.label(c, "选择资源 → 编辑预览 → 导出任务 → 安全退出前等待或取消。");
             ui.text(c, "窗口：自定义标题栏最小化/最大化；F11 最大化/还原；外部文件可直接拖入登记。", .{ .size = 11, .color = c.theme.muted, .wrap = true });
             if (ui.button(c, "打开资源库", .{}).clicked) state.showPage(.library);
             if (ui.button(c, "查看任务", .{}).clicked) state.showPage(.jobs);

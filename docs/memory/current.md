@@ -1,5 +1,7 @@
 # 现役状态（2026-11-12）
 
+> **2026-11-12 单进程统一（优先于本页下文所有关于 Host、Shell 附着、RPC、重连与“未决结果”的描述）**：Host 进程已删除。每次运行 `cutrans.exe` 都是一个环境实例，同一进程持有 Runtime、作业驱动线程、生命周期记录与 App（桌面、`library` 资源库，或无窗口的 `exec` 脚本）；`session/instance.lock` 保证一个数据目录只有一个实例。窗口关闭与“退出虚拟环境…”是同一个安全退出，业务受理闸门已下沉到 Runtime（`cutrans_vm_set_admission`）；关闭环境后导出不再继续。旧 exe（`cutrans_vm`、`cutrans_vm_host`、`cutrans_shell`、`cutrans_library_nanoui`）、旧 Shell Pack、`--role`、`start/stop/attach/jobs` 动作，以及重连、pending 标记都已删除；调试改用 `exec`、App 隐藏场景、DLL ctypes 与只读 `status`。决定、验证与未覆盖范围见[单进程统一](2026-11-12-single-process.md)。下文中旧描述作为历史保留，按此条理解。
+
 这是当前实现的摘要。业务最近完成到 C2c3 第一片（目录成员显式收纳）；此前已完成工作正文、本机文件、环境启动屏障、同 EXE 进程角色、静态 Runtime、PayloadSource、环境内安全退出、Host 重连与未决结果闭环。各次实际验收以对应记录为准。当前进度、剩余问题与接续顺序见文末[2026-11-12 进度快照](#2026-11-12-进度快照)；[旧检查点](2026-11-09-checkpoint.md)与[旧进度台账](2026-11-08-progress.md)保留为历史记录。各次历史测试只证明当次代码及产物。
 
 ## 产品与边界
@@ -8,7 +10,7 @@
 - `.cut v3` 支持 testsrc/gain/invert/over/image/resize，规范化文本、稳定引用与内容指纹。
 - A1已加入节点发号持久高水位及文档／History候选提交；失败不发布半编辑，撤销／恢复／新分支不复用节点ID。A2的文档API v1提供Runtime epoch＋revision、文档操作前置版本、请求去重与一致文档快照；当前Host／Shell为ABI11（2026-11-10 Preview ABI 升级；以 `vne/abi.zig` 的 `version` 为准），独立资源API已在C2c2显式升v2，并在工作正文切片升v3，在本机文件切片升v4；保留旧定位／采用／登记语义，新增工作快照／提交与一层只读浏览。Shell分账已知Outcome和投影失败，结果未知时仅重试原请求。工作成功回执已可跨恢复，旧文档／普通资源回执仍不跨Runtime重启保存；save／旧资源命令／原始语义输入尚未全部转为受管理请求。
 - PNG 导入、预览、合成与导出可经同一命令入口完成；History、Task、Catalog 和授权有恢复记录。
-- 默认公开入口启动或复用独立 Host，再附着 desktop；关闭 Shell 与停止 VM 分开。
+- ~~默认公开入口启动或复用独立 Host，再附着 desktop；关闭 Shell 与停止 VM 分开。~~（2026-11-12 取代：单进程环境实例，关闭窗口即安全退出。）
 - B1已接通持久导出声明、有界FIFO和Host无Shell自主推进；输出先prepare／sync／记录再原子提交，终态落盘失败只补日志。可分页查询归档与错误；重启保留声明并标interrupted，不自动重做可能已经写出的输出。
 - 资源库持有稳定 ID、引用/拥有状态、虚拟文件夹和显式独立化；Station 是内存活动对象，缓存可重建。
 - C1在素材插入／Job受理前，将采用的库Source按稳定ID＋SHA-256留存到`library/versions/`。库刷新不改已有文档／History／Job；外链变化或删除后可读取已留存旧字节，严格来源读取仍检查漂移，已加载浏览另走C2c1入口。旧未留存版本仅允许同hash兼容读取，不承诺恢复未保存过的外链字节；版本列表及保留UI仍待完善。
@@ -146,6 +148,8 @@ C2c2最终179/179构建步骤、新实际DLL／Host14组及同产物18项headles
 2026-11-12 工作正文发布顺序与草稿基线：`library/work|drafts/<id>/` 的正文改名为「revision/token + 内容哈希」，旧 `<revision>.bin` 只读兼容；Catalog 提交失败留下的未引用正文不再与同一 revision 的重试冲突。`save_draft` 的 `base_revision` 必须等于当前工作头，落后客户端的草稿保存直接返回过期版本，不再写入一份提交时必然被拒的草稿。`verify-work-documents`（`CUTRANS_WORK_DOCUMENTS_VERIFY_OK`）、`verify-architecture`、`verify-repository` 退出 0；`resource_library` 测试二进制单独运行 143/143 通过。同片修正上一片对两个锁测试的错误归因：测试本身通过，失败只在构建运行器路径（HEAD 同样复现）。GUI 客户端缺少"落后后重读快照"的重同步，真实操作中会停在拒绝状态。详见 [发布顺序](2026-11-12-work-publication-order.md)。
 
 ## 2026-11-12 进度快照
+
+- **单进程统一已完成并验证（2026-11-12）**：见[单进程统一](2026-11-12-single-process.md)。`build test`、全部改写后的单进程验证（static-runtime／payload／preview／single-exe／safe-exit／local-sources／jobs／isolation／input／write-order／installer-artifact）及 DLL 回归均通过；`verify-resource-registration` 仍只在既有的受管根边界回归处失败。期间修正三处既有的陈旧断言（vne `resource_api` 测试、`verify_workspace` 的 `doc.save`、`verify_isolation` 的内嵌 context）。尚未提交。
 
 - ~~**进行中（未编译、未验证、未提交）**：接续顺序第 1 步“容量与回收（窄版）”的代码已写入工作区……在其“验证”一节补齐前，不得把 `library.remove`、授权释放或容量错误当作现役能力。~~（被下一条取代）
 - **容量与回收（窄版）已在本机验证（2026-11-12）**：代码一次编译通过、零修改。`build test` 第三次运行退出 0，前两次因 Zig loader 间歇异常失败；三个被标失败的测试二进制单独运行分别为 112/112、178/178、114/114，四个新测试逐条 OK。`verify-assets` 新增了真实 DLL 上的 `library.remove` 拒绝、空文件夹删除、ID 不复用和重启持久化断言并通过；`verify-architecture`、`verify-work-documents`、`verify-local-sources`、`verify-repository` 也都退出 0。`library.remove` 只验证了 DLL 命令入口和单元测试，Host RPC、Shell、CLI 端到端以及 GUI 删除按钮未覆盖。详见[容量与回收（窄版）](2026-11-12-capacity-reclaim.md)“验证”一节。

@@ -87,10 +87,6 @@ pub fn build(b: *std.Build) void {
     const shell_client_module = b.createModule(.{ .root_source_file = b.path("shell/root.zig"), .target = target, .optimize = optimize });
     shell_client_module.addImport("vne", vne);
     shell_client_module.addImport("ports", ports);
-    const host_module = b.createModule(.{ .root_source_file = b.path("host/root.zig"), .target = target, .optimize = optimize });
-    host_module.addImport("vne", vne);
-    host_module.addImport("ports", ports);
-    host_module.addImport("shell", shell_client_module);
     const activation_module = b.createModule(.{ .root_source_file = b.path("bootstrap/activation.zig"), .target = target, .optimize = optimize });
     activation_module.addImport("vne", vne);
     activation_module.addImport("ports", ports);
@@ -111,8 +107,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    bootstrap_module.addImport("host", host_module);
-    bootstrap_module.addImport("shell_client", shell_client_module);
     bootstrap_module.addImport("activation", activation_module);
     const dynamic_runtime_provider = b.createModule(.{ .root_source_file = b.path("bootstrap/runtime_provider_dynamic.zig"), .target = target, .optimize = optimize });
     dynamic_runtime_provider.addImport("activation", activation_module);
@@ -136,7 +130,7 @@ pub fn build(b: *std.Build) void {
     nanoui_library_app.addImport("nanoui", nanoui_dep.module("nanoui"));
     const nanoui_console = b.createModule(.{ .root_source_file = b.path("consoles/cli/nanoui.zig"), .target = target, .optimize = optimize });
     nanoui_console.addImport("vm_client", vm_client);
-    nanoui_console.addImport("shell", shell_client_module);
+    nanoui_console.addImport("vne", vne);
     nanoui_console.addImport("nanoui", nanoui_dep.module("nanoui"));
     const local_files = b.createModule(.{ .root_source_file = b.path("apps/files/nanoui.zig"), .target = target, .optimize = optimize });
     local_files.addImport("vne", vne);
@@ -153,7 +147,6 @@ pub fn build(b: *std.Build) void {
     desktop_app.addImport("local_files", local_files);
     desktop_app.addImport("palette", palette);
     desktop_app.addImport("nanoui", nanoui_dep.module("nanoui"));
-    desktop_app.addImport("shell", shell_client_module);
     const stb = b.addLibrary(.{
         .name = "cutrans_stb",
         .linkage = .static,
@@ -200,51 +193,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    unified_bootstrap.addImport("host", host_module);
-    unified_bootstrap.addImport("shell_client", shell_client_module);
     unified_bootstrap.addImport("activation", activation_module);
     unified_bootstrap.addImport("runtime_provider", static_runtime_provider);
-    const desktop_shell = b.addExecutable(.{
-        .name = "cutrans_shell",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("consoles/cli/vm_shell.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "bootstrap", .module = bootstrap_module },
-                .{ .name = "vne", .module = vne },
-                .{ .name = "nanoui_desktop", .module = desktop_app },
-            },
-        }),
-    });
-    desktop_shell.root_module.linkLibrary(stb);
-    b.installArtifact(desktop_shell);
-    const nanoui_library = b.addExecutable(.{
-        .name = "cutrans_library_nanoui",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("consoles/cli/nanoui_library.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "bootstrap", .module = bootstrap_module },
-                .{ .name = "vne", .module = vne },
-                .{ .name = "nanoui_library", .module = nanoui_library_app },
-            },
-        }),
-    });
-    b.installArtifact(nanoui_library);
-    const launcher = b.addExecutable(.{
-        .name = "cutrans_vm",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("consoles/gui/vm_launcher.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{.{ .name = "bootstrap", .module = bootstrap_module }},
-        }),
-    });
-    launcher.root_module.linkSystemLibrary("shell32", .{});
-    launcher.root_module.linkSystemLibrary("ole32", .{});
-    b.installArtifact(launcher);
     const unified_launcher = b.addExecutable(.{
         .name = "cutrans",
         .root_module = b.createModule(.{
@@ -338,19 +288,6 @@ pub fn build(b: *std.Build) void {
     bootstrap.root_module.linkSystemLibrary("ole32", .{});
     b.installArtifact(bootstrap);
 
-    const vm_host = b.addExecutable(.{
-        .name = "cutrans_vm_host",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("consoles/cli/vm_host.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{.{ .name = "bootstrap", .module = bootstrap_module }},
-        }),
-    });
-    vm_host.root_module.linkSystemLibrary("shell32", .{});
-    vm_host.root_module.linkSystemLibrary("ole32", .{});
-    b.installArtifact(vm_host);
-
     const runtime_files_step = b.step("runtime-files", "Stage independent VM Runtime files");
     const runtime_pack_step = b.step("runtime-pack", "Create an independently loadable VM Runtime Pack");
     var runtime_files = pack_support.Files.init(b);
@@ -375,10 +312,6 @@ pub fn build(b: *std.Build) void {
     runtime_pack_step.dependOn(&runtime_install.step);
     b.getInstallStep().dependOn(&runtime_install.step);
 
-    const shell_files_step = b.step("shell-files", "Stage desktop Shell files");
-    const shell_pack_step = b.step("shell-pack", "Create a desktop Shell Pack");
-    var shell_files = pack_support.Files.init(b);
-    shell_files.add(desktop_shell.getEmittedBin(), "cutrans_shell.exe");
     const shell_sources = .{
         .{ "config/startup.ccb", "vm-shell/config/startup.ccb" },
         .{ "assets/commands/00-example.ccmd", "vm-shell/assets/commands/00-example.ccmd" },
@@ -400,19 +333,6 @@ pub fn build(b: *std.Build) void {
         .{ "assets/fonts/OFL.txt", "vm-shell/licenses/NotoSansSC-OFL.txt" },
         .{ "assets/fonts/RemixIcons-LICENSE.txt", "vm-shell/licenses/RemixIcons.txt" },
     };
-    inline for (shell_sources) |source| {
-        shell_files.add(if (comptime std.mem.eql(u8, source[0], "config/startup.ccb")) startup_binary else b.path(source[0]), source[1]["vm-shell/".len..]);
-    }
-    shell_files_step.dependOn(&shell_files.write.step);
-    const shell_pack_dir = shell_files.finish("tools/build_shell_pack.py", "shell-pack.json", &.{ "--abi", "windows-x64", "--entry", "cutrans_shell.exe", "--all-files" });
-    const shell_install = b.addInstallDirectory(.{ .source_dir = shell_pack_dir, .install_dir = .prefix, .install_subdir = "vm-shell" });
-    shell_pack_step.dependOn(&shell_install.step);
-    b.getInstallStep().dependOn(&shell_install.step);
-
-    const nanoui_files_step = b.step("nanoui-library-files", "Stage the independent NanoUI resource library Shell");
-    const nanoui_pack_step = b.step("nanoui-library-pack", "Create the NanoUI resource library Shell Pack");
-    var nanoui_files = pack_support.Files.init(b);
-    nanoui_files.add(nanoui_library.getEmittedBin(), "cutrans_library_nanoui.exe");
     const nanoui_sources = .{
         .{ "assets/examples/pngtest.png", "nanoui-library/assets/examples/pngtest.png" },
         .{ "assets/examples/SOURCES.md", "nanoui-library/assets/examples/SOURCES.md" },
@@ -428,13 +348,6 @@ pub fn build(b: *std.Build) void {
         .{ "assets/fonts/OFL.txt", "nanoui-library/licenses/NotoSansSC-OFL.txt" },
         .{ "assets/fonts/RemixIcons-LICENSE.txt", "nanoui-library/licenses/RemixIcons.txt" },
     };
-    inline for (nanoui_sources) |source| nanoui_files.add(b.path(source[0]), source[1]["nanoui-library/".len..]);
-    nanoui_files_step.dependOn(&nanoui_files.write.step);
-    const nanoui_pack_dir = nanoui_files.finish("tools/build_shell_pack.py", "shell-pack.json", &.{ "--abi", "windows-x64", "--entry", "cutrans_library_nanoui.exe", "--id", "nanoui-library", "--all-files" });
-    const nanoui_install = b.addInstallDirectory(.{ .source_dir = nanoui_pack_dir, .install_dir = .prefix, .install_subdir = "nanoui-library" });
-    nanoui_pack_step.dependOn(&nanoui_install.step);
-    b.getInstallStep().dependOn(&nanoui_install.step);
-
     const payload_pack_step = b.step("payload-pack", "Create builtin NanoUI payload directories without legacy executables");
     var payload_desktop_files = pack_support.Files.init(b);
     inline for (shell_sources) |source| {
@@ -471,15 +384,10 @@ pub fn build(b: *std.Build) void {
     portable_step.dependOn(&build_context_install.step);
     var portable_files = pack_support.Files.init(b);
     portable_files.add(portable_context.manifest, "cutrans-context.json");
-    portable_files.add(launcher.getEmittedBin(), "cutrans_vm.exe");
     portable_files.add(unified_launcher.getEmittedBin(), "cutrans.exe");
     portable_files.add(diagnostics.getEmittedBin(), "cutrans_diag.exe");
     portable_files.add(bootstrap.getEmittedBin(), "cutrans_bootstrap.exe");
-    portable_files.add(vm_host.getEmittedBin(), "cutrans_vm_host.exe");
-    portable_files.add(desktop_shell.getEmittedBin(), "cutrans_shell.exe");
     portable_files.directory(runtime_pack_dir, "runtime");
-    portable_files.directory(shell_pack_dir, "shell");
-    portable_files.directory(nanoui_pack_dir, "nanoui-library");
     portable_files.directory(payload_desktop_dir, "payload/desktop");
     portable_files.directory(payload_library_dir, "payload/nanoui-library");
     portable_files.add(startup_binary, "config/startup.ccb");
@@ -535,10 +443,6 @@ pub fn build(b: *std.Build) void {
     const workspace_verify = pack_support.verify(b, "tools/verify_workspace.py", &.{});
     workspace_verify.step.dependOn(portable_step);
     workspace_step.dependOn(&workspace_verify.step);
-    const workspace_rpc_step = b.step("verify-workspace-rpc", "Verify document requests through the distributed Host pipe");
-    const workspace_rpc_verify = pack_support.verify(b, "tools/verify_workspace_rpc.py", &.{});
-    workspace_rpc_verify.step.dependOn(portable_step);
-    workspace_rpc_step.dependOn(&workspace_rpc_verify.step);
     const jobs_step = b.step("verify-jobs", "Verify durable export jobs and autonomous Host scheduling");
     const jobs_verify = pack_support.verify(b, "tools/verify_jobs.py", &.{});
     jobs_verify.step.dependOn(portable_step);
@@ -575,10 +479,6 @@ pub fn build(b: *std.Build) void {
     const local_sources_verify = pack_support.verify(b, "tools/verify_local_sources.py", &.{});
     local_sources_verify.step.dependOn(portable_step);
     local_sources_step.dependOn(&local_sources_verify.step);
-    const same_file_step = b.step("verify-same-file", "Verify controller, Host and NanoUI roles from the same packaged EXE");
-    const same_file_verify = pack_support.verify(b, "tools/verify_same_file.py", &.{});
-    same_file_verify.step.dependOn(portable_step);
-    same_file_step.dependOn(&same_file_verify.step);
     const static_runtime_step = b.step("verify-static-runtime", "Verify the built-in Runtime without a Runtime directory and retain dynamic fallback");
     const static_runtime_verify = pack_support.verify(b, "tools/verify_static_runtime.py", &.{});
     static_runtime_verify.step.dependOn(portable_step);
@@ -591,26 +491,14 @@ pub fn build(b: *std.Build) void {
     const preview_verify = pack_support.verify(b, "tools/verify_preview.py", &.{});
     preview_verify.step.dependOn(portable_step);
     preview_step.dependOn(&preview_verify.step);
-    const reconnect_step = b.step("verify-reconnect", "Verify Shell reconnect after a real Host stop and restart");
-    const reconnect_verify = pack_support.verify(b, "tools/verify_reconnect.py", &.{});
-    reconnect_verify.step.dependOn(portable_step);
-    reconnect_step.dependOn(&reconnect_verify.step);
     const write_order_step = b.step("verify-write-order", "Verify canonical document tails and the save recovery marker");
     const write_order_verify = pack_support.verify(b, "tools/verify_write_order.py", &.{});
     write_order_verify.step.dependOn(portable_step);
     write_order_step.dependOn(&write_order_verify.step);
-    const unknown_result_step = b.step("verify-unknown-result", "Verify a committed edit whose reply is lost across a Host restart");
-    const unknown_result_verify = pack_support.verify(b, "tools/verify_unknown_result.py", &.{});
-    unknown_result_verify.step.dependOn(portable_step);
-    unknown_result_step.dependOn(&unknown_result_verify.step);
     const safe_exit_step = b.step("verify-safe-exit", "Verify environment exit admission, job draining, retry and NanoUI draft protection");
     const safe_exit_verify = pack_support.verify(b, "tools/verify_safe_exit.py", &.{});
     safe_exit_verify.step.dependOn(portable_step);
     safe_exit_step.dependOn(&safe_exit_verify.step);
-    const host_transport_step = b.step("verify-host-transport", "Verify Host pipe cancellation and stalled peer recovery");
-    const host_transport_verify = pack_support.verify(b, "tools/verify_host_transport.py", &.{});
-    host_transport_verify.step.dependOn(portable_step);
-    host_transport_step.dependOn(&host_transport_verify.step);
     const artifact_step = b.step("verify-installer-artifact", "Probe the actual installer preflight without registering an installation");
     const artifact_verify = pack_support.verify(b, "tools/verify_windows_installer.py", &.{"--artifact-check"});
     artifact_verify.step.dependOn(installer_step);
@@ -668,33 +556,12 @@ pub fn build(b: *std.Build) void {
     verify_playback.step.dependOn(&clean_playback_user.step);
     verify_playback_step.dependOn(&verify_playback.step);
 
-    const verify_host_step = b.step("verify-host", "Verify independent VM Host lifecycle and recovery");
-    const clean_host_user = pack_support.action(b, "clean", &.{"verification/host-user"});
-    clean_host_user.step.dependOn(portable_step);
-    const verify_host = pack_support.verify(b, "tools/verify_host.py", &.{});
-    verify_host.step.dependOn(&clean_host_user.step);
-    verify_host_step.dependOn(&verify_host.step);
-
-    const verify_attach_step = b.step("verify-attach", "Verify Shell reattachment while the VM Host stays alive");
-    const clean_attach_user = pack_support.action(b, "clean", &.{"verification/attach-user"});
-    clean_attach_user.step.dependOn(portable_step);
-    const verify_attach = pack_support.verify(b, "tools/verify_attach.py", &.{});
-    verify_attach.step.dependOn(&clean_attach_user.step);
-    verify_attach_step.dependOn(&verify_attach.step);
-
     const verify_assets_step = b.step("verify-assets", "Verify ephemeral assets and independent Content Snapshots");
     const clean_asset_user = pack_support.action(b, "clean", &.{"verification/asset-user"});
     clean_asset_user.step.dependOn(portable_step);
     const verify_assets = pack_support.verify(b, "tools/verify_assets.py", &.{});
     verify_assets.step.dependOn(&clean_asset_user.step);
     verify_assets_step.dependOn(&verify_assets.step);
-
-    const verify_shell_step = b.step("verify-shell", "Start the desktop through the VM and verify startup logs");
-    const clean_shell_user = pack_support.action(b, "clean", &.{"verification/shell-user"});
-    clean_shell_user.step.dependOn(portable_step);
-    const verify_shell = pack_support.verify(b, "tools/verify_shell.py", &.{});
-    verify_shell.step.dependOn(&clean_shell_user.step);
-    verify_shell_step.dependOn(&verify_shell.step);
 
     const nanoui_test_step = b.step("test-nanoui", "Run independently vendored NanoUI tests without WebView2");
     const nanoui_tests = b.addTest(.{ .root_module = nanoui_dep.module("nanoui") });
@@ -707,23 +574,7 @@ pub fn build(b: *std.Build) void {
     const nanoui_library_tests = b.addTest(.{ .root_module = nanoui_library_app });
     const run_nanoui_library_tests = b.addRunArtifact(nanoui_library_tests);
     nanoui_library_test_step.dependOn(&run_nanoui_library_tests.step);
-    nanoui_library_test_step.dependOn(&nanoui_library.step);
-
-    const verify_nanoui_library_step = b.step("verify-nanoui-library", "Verify the NanoUI resource library through a real attached Host");
-    const clean_nanoui_library = pack_support.action(b, "clean", &.{"verification/nanoui-library"});
-    clean_nanoui_library.step.dependOn(b.getInstallStep());
-    clean_nanoui_library.step.dependOn(runtime_pack_step);
-    clean_nanoui_library.step.dependOn(nanoui_pack_step);
-    const verify_nanoui_library = pack_support.verify(b, "tools/verify_nanoui_library.py", &.{});
-    verify_nanoui_library.step.dependOn(&clean_nanoui_library.step);
-    verify_nanoui_library_step.dependOn(&verify_nanoui_library.step);
-
-    const verify_nanoui_portable_step = b.step("verify-nanoui-portable", "Verify the packaged NanoUI Shell in an isolated portable copy");
-    const clean_nanoui_portable = pack_support.action(b, "clean", &.{"verification/nanoui-portable"});
-    clean_nanoui_portable.step.dependOn(portable_step);
-    const verify_nanoui_portable = pack_support.verify(b, "tools/verify_nanoui_library.py", &.{"--distribution=portable"});
-    verify_nanoui_portable.step.dependOn(&clean_nanoui_portable.step);
-    verify_nanoui_portable_step.dependOn(&verify_nanoui_portable.step);
+    nanoui_library_test_step.dependOn(&unified_launcher.step);
 
     const test_step = b.step("test", "Run headless runtime and UI model tests");
     test_support.addModule(b, test_step, vne);
@@ -731,6 +582,9 @@ pub fn build(b: *std.Build) void {
     // declarations, so vne/root.zig re-exports contributed nothing. Canonical
     // .cut and atomic-write invariants are asserted here explicitly.
     test_support.addSource(b, test_step, "vne/documents.zig", target, optimize, &.{});
+    test_support.addSource(b, test_step, "vne/lifecycle.zig", target, optimize, &.{});
+    test_support.addSource(b, test_step, "vne/environment_control.zig", target, optimize, &.{});
+    test_support.addSource(b, test_step, "vne/job_driver.zig", target, optimize, &.{});
     const runtime_suites = test_support.RuntimeSuites{
         .b = b,
         .step = test_step,
@@ -754,8 +608,7 @@ pub fn build(b: *std.Build) void {
         test_support.addSource(b, test_step, "runtime/" ++ name ++ ".zig", target, optimize, &.{.{ .name = "vne", .module = vne }});
     test_support.addSource(b, test_step, "runtime/startup.zig", target, optimize, &.{ .{ .name = "assets", .module = assets }, .{ .name = "ports", .module = ports } });
     runtime_suites.add("runtime/paths.zig");
-    inline for (.{ "paths", "file_identity", "file_dialog", "process", "library" }) |name| runtime_suites.add("ports/" ++ name ++ ".zig");
-    test_support.addModule(b, test_step, host_module);
+    inline for (.{ "paths", "file_identity", "file_dialog", "process", "library", "instance_lock" }) |name| runtime_suites.add("ports/" ++ name ++ ".zig");
     test_support.addModule(b, test_step, bootstrap_module);
     test_support.addModule(b, test_step, shell_client_module);
     test_support.addSource(b, test_step, "shell/library_client.zig", target, optimize, &.{.{ .name = "vne", .module = vne }});
@@ -793,7 +646,7 @@ pub fn build(b: *std.Build) void {
     test_support.addModuleTests(b, test_step, desktop_tests);
     const nanoui_desktop_test_step = b.step("test-nanoui-desktop", "Compile the unified NanoUI desktop frontend");
     nanoui_desktop_test_step.dependOn(&desktop_tests.step);
-    nanoui_desktop_test_step.dependOn(&desktop_shell.step);
+    nanoui_desktop_test_step.dependOn(&unified_launcher.step);
 
     const portable_run_step = b.step("run-portable", "Run the portable Cutrans VM");
     const portable_run = pack_support.action(b, "run-portable", &.{});
@@ -801,7 +654,7 @@ pub fn build(b: *std.Build) void {
     portable_run_step.dependOn(&portable_run.step);
 
     const vm_run_step = b.step("run-vm", "Run the Cutrans VM desktop");
-    const vm_run = b.addRunArtifact(launcher);
+    const vm_run = b.addRunArtifact(unified_launcher);
     vm_run_step.dependOn(&vm_run.step);
     vm_run.step.dependOn(b.getInstallStep());
 }

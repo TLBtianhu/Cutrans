@@ -1,7 +1,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const vm_client = @import("vm_client");
-const shell = @import("shell");
+const Control = @import("vne").environment_control.Control;
 
 const ui = nanoui.ui;
 
@@ -32,6 +32,8 @@ pub const State = struct {
     jobs: ?std.json.Parsed(JobsPage) = null,
     jobs_error: ?anyerror = null,
     after: u64 = 0,
+    /// The environment that owns the job queue; set by the hosting App.
+    environment: ?*Control = null,
 
     pub fn init(ctx: *vm_client.Context) State {
         return .{ .ctx = ctx };
@@ -74,7 +76,8 @@ pub const State = struct {
     }
 
     pub fn refreshJobs(self: *State) !void {
-        const bytes = try shell.client.jobsRead(self.ctx.allocator, self.after);
+        const control = self.environment orelse return error.JobsUnavailable;
+        const bytes = try control.jobsRead(self.ctx.allocator, self.after);
         defer self.ctx.allocator.free(bytes);
         var next = try std.json.parseFromSlice(JobsPage, self.ctx.allocator, bytes, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
         errdefer next.deinit();
@@ -171,7 +174,7 @@ pub const State = struct {
         ui.column(c, .{ .width = .fill, .height = .fill, .padding = .all(16), .gap = 12 });
         defer ui.end(c);
         ui.text(c, "任务", .{ .size = 22, .weight = .bold });
-        ui.label(c, "JobRecord 为真源；近期缓存只是投影。关闭 Shell 不停止 Host 作业。");
+        ui.label(c, "JobRecord 为真源；近期缓存只是投影。安全退出前可等待或协作取消作业。");
         ui.row(c, .{ .width = .fill, .gap = 8, .align_items = .center });
         {
             defer ui.end(c);
@@ -194,7 +197,7 @@ pub const State = struct {
             for (jobs.value.items) |job| self.jobRow(c, job);
             if (jobs.value.items.len == 0) ui.text(c, "当前页没有任务记录。", .{ .color = c.theme.muted });
         } else {
-            ui.text(c, "选择“刷新任务”读取 Host 作业页。", .{ .color = c.theme.muted });
+            ui.text(c, "选择“刷新任务”读取环境的作业页。", .{ .color = c.theme.muted });
         }
     }
 };

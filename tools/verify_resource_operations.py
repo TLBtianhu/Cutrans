@@ -20,20 +20,31 @@ from build_paths import OUTPUT
 from product import identity
 from verification_paths import check_root, claim, default_root, retain
 from verify_edit_commit import exclusive_file
-from verify_host import invoke
 from verify_input import ByteSlice, hashes, string_slice
 from verify_jobs import ACCEPTED, FAILED, OK, SMALL, require, tiny_png
 from verify_jobs_async import AsyncNative
-from verify_resource_versions import (COLOR_A, COLOR_B, COLOR_C, assert_output, assert_pin, assert_projection,
-    configure as versions_configure, document_state, history_bytes, host_legacy,
-    host_listing, host_rpc, host_source_read, import_source, listing, retained_files,
-    row, source_read)
+from verify_resource_versions import (
+    COLOR_A,
+    COLOR_B,
+    COLOR_C,
+    assert_output,
+    assert_pin,
+    assert_projection,
+    configure as versions_configure,
+    document_state,
+    history_bytes,
+    import_source,
+    listing,
+    retained_files,
+    row,
+    source_read)
 from verify_workspace import Stamp, stamp
-from verify_workspace_rpc import MAX_PAYLOAD, Pipe, Workspace
 
 STALE, WRONG_EPOCH, CONFLICT, EXPIRED, BAD_SEQUENCE, CANDIDATE_CHANGED, WRONG_KIND, MISMATCH = 64, 65, 66, 67, 68, 70, 71, 72
 RELOCATE, ADOPT = 1, 2
 RESOURCE_API_VERSION = 4
+# Upper bound for one snapshot text; formerly the Host pipe's payload limit.
+MAX_PAYLOAD = 17 * 1024 * 1024
 
 
 class Proof(c.Structure):
@@ -385,118 +396,6 @@ def concurrent_resources(dll, resource, root, evidence):
         runtime.close()
 
 
-def pack_proof(proof):
-    return (struct.pack("<IIQQQQII", RESOURCE_API_VERSION, 0, *stamp(proof.stamp), proof.target_id, proof.mode, 0)
-        + bytes(proof.head_hash) + bytes(proof.content_hash) + bytes(proof.path_hash)
-        + struct.pack("<QQQ", proof.byte_length, proof.volume_serial, proof.file_index))
-
-
-def unpack_proof(raw):
-    require(len(raw) == 168, "bad proof wire length")
-    version, reserved, hi, lo, revision, target, mode, reserved2 = struct.unpack("<IIQQQQII", raw[:48])
-    require(version == RESOURCE_API_VERSION and reserved == reserved2 == 0, "bad proof wire header")
-    proof = Proof(c.sizeof(Proof), RESOURCE_API_VERSION, Stamp(hi, lo, revision), target, mode, 0)
-    proof.head_hash[:], proof.content_hash[:], proof.path_hash[:] = raw[48:80], raw[80:112], raw[112:144]
-    proof.byte_length, proof.volume_serial, proof.file_index = struct.unpack("<QQQ", raw[144:])
-    return proof
-
-
-def host_view(wire):
-    status, value, raw = host_rpc(wire, 26, struct.pack("<IIQQQ", RESOURCE_API_VERSION, 0, 0, 0, 0))
-    require(status == value == 0 and len(raw) >= 40, "real Host resource snapshot failed")
-    version, reserved, hi, lo, rev, length = struct.unpack("<IIQQQQ", raw[:40])
-    require(version == RESOURCE_API_VERSION and reserved == 0 and length == len(raw) - 40, "bad resource snapshot wire header")
-    return {"stamp": (hi, lo, rev), "body": json.loads(raw[40:])}
-
-
-def host_probe(wire, path, mode=ADOPT):
-    before = host_view(wire)
-    encoded = str(path).encode()
-    status, value, raw = host_rpc(wire, 27, struct.pack("<IIQQQQII", RESOURCE_API_VERSION, mode, *before["stamp"], 1, len(encoded), 0) + encoded)
-    require(status == value == 0, f"real Host resource probe failed: {status}")
-    return unpack_proof(raw)
-
-
-def host_request(proof, path, client, seq=1):
-    encoded = str(path).encode()
-    return struct.pack("<IIQQQ", RESOURCE_API_VERSION, 0, *client, seq) + pack_proof(proof) + struct.pack("<II", len(encoded), 0) + encoded
-
-
-def host_apply(wire, payload, expected=OK, discard=False):
-    if discard:
-        # Read only the response header: Runtime already settled, body is lost.
-        connection = Pipe(wire.endpoint)
-        try:
-            connection.write(struct.pack("<8sIIQII", b"CUTRSH2\0", 28, 0, 0, len(payload), 0))
-            connection.write(payload)
-            header = connection.read(32)
-            magic, kind, status, value, length, reserved = struct.unpack("<8sIiQII", header)
-            require(magic == b"CUTRSR2\0" and kind == 28 and status == value == reserved == 0 and length == 56,
-                "could not deliberately discard a settled resource reply")
-            wire.frames.append({"kind": 28, "request_payload": payload.hex(), "response_header": header.hex(),
-                "response_payload_deliberately_discarded": True})
-            return None
-        finally:
-            connection.close()
-    status, value, raw = host_rpc(wire, 28, payload)
-    require(status == value == 0 and len(raw) == 56, f"resource Host outcome unknown: {status}")
-    version, status, disposition, reserved, seq, hi, lo, rev, resource_id = struct.unpack("<IiIIQQQQQ", raw)
-    require(version == RESOURCE_API_VERSION and reserved == 0 and status == expected and disposition in (1, 2, 3)
-        and seq == struct.unpack_from("<Q", payload, 24)[0] and (hi or lo),
-        f"resource Host outcome status={status}, expected={expected}, invalid metadata/sequence")
-    return {"status": status, "disposition": disposition, "sequence": seq, "stamp": (hi, lo, rev), "resource_id": resource_id}
-
-
-def host_case(console, root, evidence):
-    case = root / "Host"
-    case.mkdir()
-    source, candidate_b, candidate_c = [case / name for name in ("A.png", "B.png", "C.png")]
-    for path, pixel in ((source, COLOR_A), (candidate_b, COLOR_B), (candidate_c, COLOR_C)):
-        path.write_bytes(tiny_png(pixel))
-    data, stopped = case / "data", True
-    try:
-        _, started = invoke(console, "start", data, "portable")
-        stopped = False
-        require(started["state"] == "running" and started["abi"] == identity()["host_api"], "isolated Host did not start")
-        wire = Workspace(data, evidence)
-        imported, handle, payload = host_rpc(wire, 16, str(source).encode("utf-8"))
-        require(imported == ACCEPTED and handle > 0 and not payload, "Host failed to import its synthetic resource")
-        before_doc, before_station, before_files = wire.snapshot(), host_listing(wire), resource_files(data)
-        proof_b = host_probe(wire, candidate_b)
-        require(wire.snapshot() == before_doc and host_listing(wire) == before_station and resource_files(data) == before_files,
-            "Host probe changed persistent or projected state")
-        operation = host_request(proof_b, candidate_b, (0xC2B10, 0xC2B11))
-        host_apply(wire, operation, discard=True)
-        replay = host_apply(wire, operation)
-        require(replay["disposition"] == 2, "lost resource response did not use retained receipt")
-        host_apply(wire, host_request(host_probe(wire, candidate_c), candidate_c, (0xC2B12, 0xC2B13)))
-        after_c = host_view(wire)
-        preserve(candidate_b, case / "retired-B.png", evidence)
-        require(host_apply(wire, operation) == replay and host_view(wire) == after_c,
-            "Host retry reread missing candidate or regressed newer head")
-        # Malformed requests fail at the actual boundary without touching state.
-        malformed = [b"", operation[:207], operation + b"x", struct.pack("<IIQQQ", RESOURCE_API_VERSION + 1, 0, 0, 0, 0)]
-        for payload in malformed:
-            status, value, body = host_rpc(wire, 28, payload)
-            require(status != 0 and value == 0 and not body and host_view(wire) == after_c,
-                "malformed resource request changed state or returned a fake outcome")
-        old_epoch = host_request(host_probe(wire, candidate_c), candidate_c, (0xC2B14, 0xC2B15))
-        _, final = invoke(console, "stop", data, "portable")
-        stopped = True
-        require(final["state"] == "stopped", "Host resource stop failed")
-        _, restarted = invoke(console, "start", data, "portable")
-        stopped = False
-        require(restarted["state"] == "running", "Host resource cold restart failed")
-        host_apply(wire, old_epoch, WRONG_EPOCH)
-        require(host_view(wire)["body"] == after_c["body"] and not host_listing(wire)
-            and host_source_read(wire, "library://1") == tiny_png(COLOR_C), "Host cold binding restore failed")
-        evidence["checks"].append("actual_Host_wire_probe_lost_reply_receipts_malformed_frames_and_cold_restart")
-    finally:
-        if not stopped:
-            _, final = invoke(console, "stop", data, "portable")
-            require(final["state"] == "stopped", "owned C2b Host cleanup failed")
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=default_root("resource-operations"))
@@ -516,7 +415,6 @@ def main():
         candidate_failures(dll, portable / "runtime", root, evidence)
         same_path_binding(dll, portable / "runtime", root, evidence)
         concurrent_resources(dll, portable / "runtime", root, evidence)
-        host_case(portable / "cutrans_vm.exe", root, evidence)
         require(hashes(portable) == before and not (portable / "data").exists(), "C2b verification changed artifact/data")
         evidence["passed"] = True
         print(f"CUTRANS_RESOURCE_OPERATIONS_VERIFY_OK checks={len(evidence['checks'])} evidence={root}")

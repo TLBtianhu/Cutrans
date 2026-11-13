@@ -271,19 +271,19 @@ begin
     DirExists(Root + '\payload') or FileExists(Root + '\app\cutrans_vm.exe');
 end;
 
-function StopOwnedHost: Boolean;
+{ Since 2026-11-12 there is no background Host to stop: every running
+  cutrans.exe is a visible environment that only the user may exit safely.
+  The installer refuses to proceed while one of this installation's
+  processes is alive, and never terminates it. }
+function EnvironmentStopped: Boolean;
 var
-  Root, Exe: String;
-  Code: Integer;
+  Root: String;
 begin
   Result := false;
   Root := ExpandConstant('{app}');
   if not SafeParents(Root) or not SafeParents(Root + '\data') or not OwnsRegistration(Root) then exit;
-  Exe := Root + '\app\cutrans.exe';
-  if not FileExists(Exe) or not SafeParents(Exe) or not SafeParents(Root + '\data\session') or not SafeParents(Root + '\data\documents') then exit;
-  if not Exec(Exe, 'stop --mode=installed --data="' + Root + '\data"',
-    Root + '\app', SW_HIDE, ewWaitUntilTerminated, Code) then exit;
-  Result := (Code = 0) and NoOwnedProcesses(Root);
+  if not SafeParents(Root + '\data\session') or not SafeParents(Root + '\data\documents') then exit;
+  Result := NoOwnedProcesses(Root);
 end;
 
 function RunDiagnostic(const Root, Phase: String): Integer;
@@ -355,10 +355,10 @@ begin
         Result := '此版本尚未验收不同程序资产的升级回滚事务。已在复制前拒绝，现有安装与数据保持原样。';
         exit;
       end;
-      FailureStage := 'stop-owned-host';
-      if not StopOwnedHost then
+      FailureStage := 'environment-running';
+      if not EnvironmentStopped then
       begin
-        Result := '现有安装无法正常停止并保存；未替换应用文件，请修复后重试。';
+        Result := '检测到 Cutrans 仍在运行；请先在应用内选择“退出虚拟环境…”，然后重试。未替换应用文件。';
         exit;
       end;
     end
@@ -441,8 +441,8 @@ begin
     UninstallOwned := SafeParents(Root) and OwnsRegistration(Root);
     if not UninstallOwned then
       RaiseException('此卸载器不再拥有当前安装登记，或路径包含链接。未删除任何内容。');
-    if not StopOwnedHost then
-      RaiseException('无法确认本安装已正常停止并保存。保留程序、登记和数据，请修复控制入口后重试。');
+    if not EnvironmentStopped then
+      RaiseException('检测到 Cutrans 仍在运行。请先在应用内选择“退出虚拟环境…”再卸载；程序、登记和数据均已保留。');
     if not BackupSystemState('before-uninstall') then
       RaiseException('系统登记与快捷方式备份失败。保留安装与数据，请修复后重试。');
   end;

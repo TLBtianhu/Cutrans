@@ -3,7 +3,7 @@
 Every fixture lives below one claimed verification root. Current browsing and
 hash-bound reads have different purposes: retaining an adopted revision must
 not silently detach an external reference or conceal drift in current browsing.
-All subprocesses go through verify_host's quiet automation_process wrapper.
+All subprocesses go through the quiet automation_process wrapper.
 """
 from __future__ import annotations
 
@@ -25,13 +25,11 @@ from product import identity
 from verification_paths import check_root, claim, default_root, remove, retain
 from verify_assets import (AssetInfo, AssetListReport, LibraryListReport,
                            asset_projection, library_projection)
-from verify_host import invoke, run
+from environment_harness import run
 from verify_input import ByteSlice, hashes, string_slice
 from verify_jobs import ACCEPTED, FAILED, OK, SMALL, digest_text, png, require, sha256, tiny_png
-from verify_jobs_async import (AsyncNative, configure as jobs_configure,
-                               wait_host_terminal)
+from verify_jobs_async import AsyncNative, configure as jobs_configure
 from verify_workspace import request, stamp
-from verify_workspace_rpc import MAX_PAYLOAD, Pipe, Workspace
 
 INVALID_ARGUMENTS = 3
 COLOR_A, COLOR_B, COLOR_C = (12, 34, 56, 255), (90, 110, 130, 255), (180, 20, 70, 255)
@@ -455,171 +453,6 @@ def junction_boundary_case(library, resource, root, evidence):
         runtime.close()
 
 
-def host_rpc(wire, kind, payload=b"", identity=0):
-    """Use real Host messages for Source bytes and existing Station controls."""
-    header = struct.pack("<8sIIQII", b"CUTRSH2\0", kind, 0, identity, len(payload), 0)
-    frame = {"kind": kind, "request_header": header.hex(), "request_payload": payload.hex()}
-    wire.frames.append(frame)
-    connection = Pipe(wire.endpoint)
-    try:
-        connection.write(header)
-        if payload:
-            connection.write(payload)
-        response = connection.read(32)
-        frame["response_header"] = response.hex()
-        magic, actual_kind, status, value, length, reserved = struct.unpack("<8sIiQII", response)
-        require(magic == b"CUTRSR2\0" and actual_kind == kind and reserved == 0 and length <= MAX_PAYLOAD,
-                "invalid real Host response")
-        content = connection.read(length) if length else b""
-        frame["response_payload"] = content.hex()
-        return status, value, content
-    finally:
-        connection.close()
-
-
-def host_source_read(wire, uri, digest=None, expected=OK):
-    uri_bytes, hash_bytes = uri.encode("utf-8"), (digest or "").encode("ascii")
-    payload = struct.pack("<4I", 1, len(uri_bytes), len(hash_bytes), 0) + uri_bytes + hash_bytes
-    before = host_listing(wire)
-    status, value, content = host_rpc(wire, 25, payload)
-    require(status == expected and value == 0 and (bool(content) if expected == OK else not content),
-            f"Host Source copy failed: status={status}, value={value}")
-    if digest is not None and expected == OK:
-        require(hashlib.sha256(content).hexdigest() == digest, "Host Source copy returned the other version")
-    require(host_listing(wire) == before, "Host Source copy changed Station handles or leases")
-    return content
-
-
-def discard_host_source_reply(wire, uri, digest):
-    """Send a valid read completely, then close without receiving its reply."""
-    uri_bytes, hash_bytes = uri.encode("utf-8"), digest.encode("ascii")
-    payload = struct.pack("<4I", 1, len(uri_bytes), len(hash_bytes), 0) + uri_bytes + hash_bytes
-    header = struct.pack("<8sIIQII", b"CUTRSH2\0", 25, 0, 0, len(payload), 0)
-    frame = {"kind": 25, "request_header": header.hex(), "request_payload": payload.hex(),
-             "response_deliberately_not_read": True}
-    wire.frames.append(frame)
-    connection = Pipe(wire.endpoint)
-    try:
-        connection.write(header)
-        connection.write(payload)
-    finally:
-        connection.close()
-
-
-def host_legacy(wire, name, arg=None, expected=OK):
-    name_bytes, arg_bytes = name.encode("utf-8"), (arg or "").encode("utf-8")
-    status, value, content = host_rpc(wire, 1, struct.pack("<II", len(name_bytes), len(arg_bytes)) + name_bytes + arg_bytes)
-    require(status == expected and value == 0 and not content, f"Host {name} result={status}, expected={expected}")
-
-
-def host_listing(wire):
-    status, value, content = host_rpc(wire, 12)
-    require(status == OK and value == 0 and len(content) == ctypes.sizeof(AssetListReport), "invalid Host Station list")
-    report = AssetListReport.from_buffer_copy(content)
-    require(report.struct_size == ctypes.sizeof(AssetListReport) and report.reserved == 0 and report.count <= 16,
-            "invalid Host Station metadata")
-    return {entry.handle: entry.leases for entry in report.entries[:report.count]}
-
-
-def host_asset_bytes(wire, handle):
-    status, value, content = host_rpc(wire, 15, identity=handle)
-    require(status == OK and value == 0, "Host Station content read failed")
-    return content
-
-
-def wait_host_file(wire, target):
-    before, deadline = len(wire.frames), time.monotonic() + 20
-    while not target.is_file() and time.monotonic() < deadline:
-        threading.Event().wait(0.01)
-    require(target.is_file() and len(wire.frames) == before, "Host needed a Shell, pump or poll to render an adopted version")
-
-
-def host_retention_case(console, root, evidence):
-    data, source = root / "retained versions Host data", check_root(root / "Host-reference.png")
-    a, b = tiny_png(COLOR_A), tiny_png(COLOR_B)
-    ha, hb = hashlib.sha256(a).hexdigest(), hashlib.sha256(b).hexdigest()
-    source.write_bytes(a)
-    stopped = True
-    try:
-        _, status = invoke(console, "status", data, "portable")
-        require(status["state"] == "unreachable", "owned C1 Host case already has an active instance")
-        _, started = invoke(console, "start", data, "portable")
-        stopped = False
-        require(started["state"] == "running", "isolated C1 Host failed to start")
-        wire, client = Workspace(data, evidence), (0xC1A0, 0xC1A1)
-        imported, handle_a, payload = host_rpc(wire, 16, str(source).encode("utf-8"))
-        require(imported == ACCEPTED and handle_a > 0 and not payload and not retained_files(data),
-                "Host browse/import retained bytes or omitted its handle")
-        baseline = host_listing(wire)
-        require(host_source_read(wire, "library://1", ha) == a and host_listing(wire) == baseline,
-                "Host exact Source read returned the wrong bytes or changed Station")
-        uri = b"library://1"
-        invalid_payloads = [
-            struct.pack("<4I", 1, len(uri), 64, 1) + uri + ha.encode("ascii"),
-            struct.pack("<4I", 1, len(uri), 64, 0) + uri + b"z" * 64,
-            struct.pack("<4I", 1, len(uri) + 1, 64, 0) + uri + ha.encode("ascii"),
-        ]
-        for invalid in invalid_payloads:
-            rejected, value, content = host_rpc(wire, 25, invalid)
-            require(rejected == INVALID_ARGUMENTS and value == 0 and not content,
-                    "invalid source_read wire returned content or was accepted")
-        require(host_listing(wire) == baseline, "invalid Host Source copy changed Station leases")
-        for _ in range(3):
-            discard_host_source_reply(wire, "library://1", ha)
-        require(host_source_read(wire, "library://1", ha) == a and host_listing(wire) == baseline,
-                "discarded Source replies leaked Station state or prevented a later successful read")
-        initial = wire.snapshot()
-        inserted = wire.submit(wire.request(client, 1, initial["stamp"], "editor.asset.insert", str(handle_a)))
-        require(inserted["status"] == OK, "Host failed to adopt its Source")
-        assert_pin(data, ha, a)
-        host_legacy(wire, "doc.save", "session://Host-saved.cut")
-        source.write_bytes(b)
-        host_legacy(wire, "library.refresh", "1")
-        host_legacy(wire, "asset.open", "library://1", ACCEPTED)
-        handle_b = next(handle for handle in host_listing(wire) if handle != handle_a)
-        require(host_asset_bytes(wire, handle_a) == a and host_asset_bytes(wire, handle_b) == b
-                and host_source_read(wire, "library://1", ha) == a and host_source_read(wire, "library://1", hb) == b,
-                "Host refresh confused old/new versions sharing one URI")
-        require(ha in wire.snapshot()["text"] and not pin_path(data, hb).exists(),
-                "Host refresh implicitly adopted or retained an unselected revision")
-        accepted = wire.submit(wire.request(client, 2, wire.snapshot()["stamp"], "editor.export.png", "session://exports/Host-old-A.png"))
-        require(accepted["status"] == ACCEPTED and accepted["task_id"], "Host old-version export was not accepted")
-        source.unlink()
-        evidence["deleted"].append({"path": str(source), "reason": "removed this case's Host Source after old-version admission"})
-        target = data / "exports/Host-old-A.png"
-        wait_host_file(wire, target)
-        completed = wait_host_terminal(wire, accepted["task_id"])
-        output = assert_output(completed, target, COLOR_A)
-        _, final = invoke(console, "stop", data, "portable")
-        require(final["state"] == "stopped", "C1 Host did not stop cleanly")
-        stopped = True
-        _, restarted = invoke(console, "start", data, "portable")
-        stopped = False
-        require(restarted["state"] == "running", "C1 Host did not restart")
-        require(not host_listing(wire), "Host restart incorrectly restored live Station handles")
-        require(host_source_read(wire, "library://1", ha) == a and not host_listing(wire),
-                "Host Source read could not copy retained bytes or revived Station after restart")
-        host_legacy(wire, "asset.open", "library://1", FAILED)
-        second = wire.submit(wire.request((0xC1A2, 0xC1A3), 1, wire.snapshot()["stamp"],
-                                          "editor.export.png", "session://exports/Host-restored-A.png"))
-        require(second["status"] == ACCEPTED, "restarted Host could not admit retained version")
-        restored_target = data / "exports/Host-restored-A.png"
-        wait_host_file(wire, restored_target)
-        restored_job = wait_host_terminal(wire, second["task_id"])
-        restored_output = assert_output(restored_job, restored_target, COLOR_A)
-        require(sha256(target) == output["sha256"] and sha256(restored_target) == restored_output["sha256"],
-                "Host restart or second attempt modified its old completed output")
-        evidence["Host_retained_versions"] = {"first": completed, "first_output": output,
-            "restored": restored_job, "restored_output": restored_output,
-            "invalid_source_read_requests": len(invalid_payloads), "source_replies_deliberately_discarded": 3,
-            "station_before_and_after_discarded_replies": baseline, "shell_attached": False}
-        evidence["checks"].append("real_Host_Source_copy_wire_preserves_Station_and_autonomous_retained_render_survives_restart")
-    finally:
-        if not stopped:
-            _, cleanup = invoke(console, "stop", data, "portable")
-            require(cleanup["state"] == "stopped", "owned C1 Host cleanup failed")
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=default_root("resource-versions"))
@@ -643,7 +476,6 @@ def main():
         corrupt_version_case(library, resource, root, evidence)
         legacy_fallback_and_job_pin_case(library, resource, root, evidence)
         junction_boundary_case(library, resource, root, evidence)
-        host_retention_case(portable / "cutrans_vm.exe", root, evidence)
         require(hashes(portable) == before and not (portable / "data").exists(), "verification changed the tested artifact")
         evidence["passed"] = True
         print(f"CUTRANS_RESOURCE_VERSIONS_VERIFY_OK checks={len(evidence['checks'])} evidence={root}")

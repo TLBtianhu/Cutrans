@@ -19,12 +19,11 @@ sys.dont_write_bytecode = True
 from build_paths import OUTPUT
 from product import identity
 from verification_paths import check_root, claim, default_root, retain
-from verify_host import invoke, run
+from environment_harness import run_app
 from verify_input import ByteSlice, hashes
 from verify_jobs import OK, SMALL, require, tiny_png
 from verify_resource_operations import Native, configure, request
-from verify_resource_versions import COLOR_A, host_rpc
-from verify_workspace_rpc import Workspace
+from verify_resource_versions import COLOR_A
 
 VERSION = 4
 BROWSE, LOCAL_READ = 31, 32
@@ -129,72 +128,16 @@ def dll_case(library, runtime_dir, root, evidence):
         runtime.close()
 
 
-def host_browse(wire, path, cursor=0, limit=128, expected=OK):
-    encoded = str(path).encode("utf-8")
-    payload = struct.pack("<IIQII", VERSION, 0, cursor, limit, len(encoded)) + encoded
-    status, value, content = host_rpc(wire, BROWSE, payload)
-    require(status == expected and value == 0, f"Host browse status={status}, expected={expected}")
-    return json.loads(content) if status == OK else None
-
-
-def host_read(wire, path, expected=OK):
-    encoded = str(path).encode("utf-8")
-    payload = struct.pack("<IIII", VERSION, 0, len(encoded), 0) + encoded
-    status, value, content = host_rpc(wire, LOCAL_READ, payload)
-    require(status == expected and value == 0, f"Host local read status={status}, expected={expected}")
-    return content
-
-
-def host_case(console, root, evidence):
-    source = make_fixture(check_root(root / "host source"))
-    data = check_root(root / "host data")
-    wire = Workspace(data, evidence)
-    stopped = False
-    try:
-        invoke(console, "start", data, "portable")
-        require(host_browse(wire, source, 0, 1)["entries"][0]["name"] == "nested", "Host browse returned another page")
-        require(host_read(wire, source / "a.txt") == b"local text"
-            and host_read(wire, source / "empty.bin") == b"", "Host local read returned wrong bytes")
-        host_browse(wire, data, expected=4)
-        require(not (data / "library/catalog.json").exists(), "Host browsing created a Catalog")
-        invoke(console, "stop", data, "portable")
-        stopped = True
-        invoke(console, "start", data, "portable")
-        stopped = False
-        require(host_read(wire, source / "a.txt") == b"local text", "Host restart changed local reading")
-        invoke(console, "stop", data, "portable")
-        stopped = True
-        evidence["checks"].append("host_browse_read_managed_root_refusal_and_restart_without_catalog_side_effects")
-    finally:
-        if not stopped:
-            try:
-                invoke(console, "stop", data, "portable")
-            except Exception as error:
-                evidence["host_cleanup_error"] = repr(error)
-
-
-def gui_case(console, shell, pack, root, evidence):
+def gui_case(console, root, evidence):
+    """The local-files page runs inside the single-process environment."""
     source = make_fixture(check_root(root / "gui source"))
     data = check_root(root / "gui data")
-    stopped = False
-    try:
-        invoke(console, "start", data, "portable")
-        output = run([str(shell), "--mode=portable", f"--data={data}", f"--shell-dir={pack}",
-            "--files-demo", "--open", str(source)])
-        require("CUTRANS_LOCAL_FILES_OK" in output and "CUTRANS_SHELL_PRECHECK_OK id=desktop-shell" in output
-            and "CUTRANS_ENVIRONMENT_SESSION_OK" in output,
-            "local-files UI did not establish the environment and complete browse, page, text, directory, register and insert")
-        evidence["checks"].append("native_ui_browse_text_nested_page_refresh_explicit_register_and_insert")
-        invoke(console, "stop", data, "portable")
-        stopped = True
-        evidence["gui_stopped"] = True
-    finally:
-        if not stopped:
-            try:
-                invoke(console, "stop", data, "portable")
-                evidence["gui_stopped"] = True
-            except Exception as error:
-                evidence["gui_cleanup_error"] = repr(error)
+    output = run_app(console, data, check_root(root / "gui.log"), document=source, demo="--files-demo")
+    require("CUTRANS_LOCAL_FILES_OK" in output and "CUTRANS_SHELL_PRECHECK_OK id=desktop-shell" in output
+        and "CUTRANS_ENVIRONMENT_SESSION_OK" in output and "CUTRANS_ENVIRONMENT_STOPPED" in output,
+        "local-files UI did not establish the environment and complete browse, page, text, directory, register and insert")
+    evidence["checks"].append("native_ui_browse_text_nested_page_refresh_explicit_register_and_insert")
+    evidence["gui_stopped"] = True
 
 
 def main():
@@ -211,11 +154,10 @@ def main():
         library = c.WinDLL(str(portable / "runtime/cutrans_vm_runtime.dll"))
         configure(library)
         dll_case(library, portable / "runtime", root, evidence)
-        host_case(portable / "cutrans_vm.exe", root, evidence)
-        gui_case(portable / "cutrans_vm.exe", portable / "cutrans_shell.exe", portable / "shell", root, evidence)
+        gui_case(portable / "cutrans.exe", root, evidence)
         require(hashes(portable) == before, "local-source verification modified its tested artifact")
         evidence["passed"] = True
-        print("CUTRANS_LOCAL_SOURCES_VERIFY_OK dll=1 host=1 ui=1 no_implicit_registration=1")
+        print("CUTRANS_LOCAL_SOURCES_VERIFY_OK dll=1 single_process_ui=1 no_implicit_registration=1")
     except BaseException as error:
         evidence["error"] = repr(error)
         raise

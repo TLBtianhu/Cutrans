@@ -186,16 +186,6 @@ pub const AssetInfo = extern struct {
     reserved: u32 = 0,
 };
 
-pub const ShellRequest = extern struct {
-    struct_size: u32,
-    abi_version: u32,
-    resource_dir: ByteSlice,
-    open_path: ByteSlice,
-    record_input: ByteSlice = .{},
-    playback_frames: i64 = 0,
-    asset_workspace: u32 = 0,
-};
-
 pub const ShellConfig = extern struct {
     struct_size: u32,
     abi_version: u32,

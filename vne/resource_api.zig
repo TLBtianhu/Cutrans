@@ -222,10 +222,14 @@ test "work requests separate new drafts from commit and discard" {
     try std.testing.expect(!validWorkRequest(&request));
     request.resource_id = 3;
     request.base_revision = 1;
-    try std.testing.expect(validWorkRequest(&request));
-    request.mode = @backingInt(WorkMode.commit);
+    // A draft never renames: the label belongs to create only.
     try std.testing.expect(!validWorkRequest(&request));
     request.label = .{};
+    try std.testing.expect(validWorkRequest(&request));
+    request.mode = @backingInt(WorkMode.commit);
+    // Commit names the draft it publishes, not a base revision.
+    try std.testing.expect(!validWorkRequest(&request));
+    request.base_revision = 0;
     request.expected_draft_revision = 4;
     try std.testing.expect(validWorkRequest(&request));
     request.api_version = 2;

@@ -19,14 +19,21 @@ from product import identity
 from verification_paths import check_root, claim, default_root, retain
 from verify_assets import AssetListReport
 from verify_edit_commit import exclusive_file
-from verify_host import invoke
 from verify_input import hashes
 from verify_jobs import OK, ACCEPTED, FAILED, require, tiny_png
 from verify_resource_operations import Native, configure, request, protected, resource_files
-from verify_resource_versions import (COLOR_A, COLOR_B, assert_pin, assert_projection,
-    host_asset_bytes, host_legacy, host_rpc, import_source, source_read, retained_files,
-    document_state, history_bytes, row, assert_output)
-from verify_workspace_rpc import Pipe, Workspace
+from verify_resource_versions import (
+    COLOR_A,
+    COLOR_B,
+    assert_pin,
+    assert_projection,
+    import_source,
+    source_read,
+    retained_files,
+    document_state,
+    history_bytes,
+    row,
+    assert_output)
 
 UNCHECKED, UNCHANGED, MISSING, CHANGED, IDENTITY_CHANGED, UNVERIFIED, UNAVAILABLE, SUPERSEDED = range(8)
 
@@ -223,73 +230,6 @@ def versions_and_identity(dll, resource, root, evidence):
         runtime.close()
 
 
-def host_station(wire):
-    status, value, raw = host_rpc(wire, 12)
-    require(status == value == 0 and len(raw) == c.sizeof(AssetListReport), "bad actual Host Station payload")
-    return station_report(AssetListReport.from_buffer_copy(raw))
-
-
-def discard_ensure(wire, digest):
-    name, arg = b"asset.ensure", f"1 {digest}".encode()
-    payload = struct.pack("<II", len(name), len(arg)) + name + arg
-    connection = Pipe(wire.endpoint)
-    try:
-        connection.write(struct.pack("<8sIIQII", b"CUTRSH2\0", 1, 0, 0, len(payload), 0))
-        connection.write(payload)
-        header = connection.read(32)
-        magic, kind, status, value, length, reserved = struct.unpack("<8sIiQII", header)
-        require(magic == b"CUTRSR2\0" and kind == 1 and status == ACCEPTED and value == length == reserved == 0,
-            "cannot deliberately ignore settled ensure reply")
-        wire.frames.append({"kind": 1, "request_payload": payload.hex(), "response_header_deliberately_unused": header.hex()})
-    finally:
-        connection.close()
-
-
-def host_lifecycle(console, root, evidence):
-    case = root / "Host"
-    case.mkdir()
-    source, data = case / "source.png", case / "data"
-    a = tiny_png(COLOR_A)
-    ha = hashlib.sha256(a).hexdigest()
-    source.write_bytes(a)
-    stopped = True
-    try:
-        _, current = invoke(console, "start", data, "portable")
-        stopped = False
-        require(current["state"] == "running" and current["abi"] == identity()["host_api"], "isolated C2c1 Host failed to start")
-        wire = Workspace(data, evidence)
-        status, handle, body = host_rpc(wire, 16, str(source).encode())
-        require(status == ACCEPTED and handle and not body, "Host Source registration failed")
-        before, declarations = host_station(wire), resource_files(data)
-        for _ in range(4):
-            discard_ensure(wire, ha)
-            host_legacy(wire, "asset.ensure", f"1 {ha}", ACCEPTED)
-        require(host_station(wire) == before and resource_files(data) == declarations, "Host retries leaked leases or wrote declarations")
-        move_owned(source, case / "retired-source.png", evidence)
-        host_legacy(wire, "asset.ensure", f"1 {ha}", ACCEPTED)
-        host_legacy(wire, "asset.check", str(handle))
-        require(host_station(wire)[1][handle]["source_status"] == MISSING and host_asset_bytes(wire, handle) == a
-            and resource_files(data) == declarations, "Host missing source destroyed RAM or changed a declaration")
-        host_legacy(wire, "library.detach", "1")
-        require(host_station(wire)[1][handle]["kind"] == 2 and host_station(wire)[1][handle]["source_status"] == UNCHECKED,
-            "Host RAM detach failed or leaked old missing observation")
-        assert_pin(data, ha, a)
-        _, current = invoke(console, "stop", data, "portable")
-        stopped = True
-        require(current["state"] == "stopped", "Host did not stop")
-        _, current = invoke(console, "start", data, "portable")
-        stopped = False
-        require(current["state"] == "running" and not host_station(wire)[1], "cold Host revived Station handles")
-        host_legacy(wire, "asset.ensure", f"1 {ha}", ACCEPTED)
-        require(len(host_station(wire)[1]) == 1 and host_asset_bytes(wire, next(iter(host_station(wire)[1]))) == a,
-            "cold Host did not load independent bytes without original")
-        evidence["checks"].append("actual_Host_lost_reply_ensure_missing_observation_RAM_detach_and_cold_restore")
-    finally:
-        if not stopped:
-            _, current = invoke(console, "stop", data, "portable")
-            require(current["state"] == "stopped", "owned C2c1 Host cleanup failed")
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=default_root("resident-resources"))
@@ -308,7 +248,6 @@ def main():
         require(dll.cutrans_vm_abi_version() == identity()["host_api"] >= 10, "wrong actual Station ABI")
         native_lifecycle(dll, portable / "runtime", root, evidence)
         versions_and_identity(dll, portable / "runtime", root, evidence)
-        host_lifecycle(portable / "cutrans_vm.exe", root, evidence)
         require(hashes(portable) == before and not (portable / "data").exists(), "verification changed artifact or default data")
         evidence["passed"] = True
         print(f"CUTRANS_RESIDENT_RESOURCES_VERIFY_OK checks={len(evidence['checks'])} evidence={root}")
