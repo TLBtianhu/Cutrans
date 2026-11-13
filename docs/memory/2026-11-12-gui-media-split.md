@@ -24,6 +24,7 @@
 
 - 已守住：`tools/verify_architecture.py` 禁止 `runtime` 导入 NanoUI；文档预览由 VM 求值，GUI 不再自己运行预览 DAG。
 - **灰区**：`consoles/gui/vm_client.zig` 的 `previewAsset` 和 GUI 侧的 Source 读取，用共享的 `imaging` 模块在 GUI 里**本地解码 PNG**。这是 2026-11-07 C1 片定下的“GUI 获取 owned Source 字节后本地解码”。按本原则，媒体解码应归 VM，GUI 只接收已解码的帧。待定：改为由 VM 交付已解码的素材预览帧，或明确把“缩略图级解码”列为允许的例外。
+  - （同日补充）用户随后指出，素材预览本身是一个功能性插件，应当自渲染像素，见 [App／插件界面模型](2026-11-12-app-plugin-ui-model.md)。因此方向是由预览插件负责解码，GUI 不再解码，不设例外。尚未实施。
 - 编辑器里 RGBA 到预乘 BGRA 的转换属于显示适配，留在 GUI 一侧合理。
 - 媒体渲染器本身目前只有 `runtime/render.zig` 的 CPU 逐像素求值，真正的自研媒体渲染器尚未开始，将建立在 v4 内存模型与流协议之上。
 

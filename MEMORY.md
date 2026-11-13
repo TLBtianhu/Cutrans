@@ -69,6 +69,8 @@
 
 ## 最新实施记录
 
+- [2026-11-12 App／插件界面模型：自渲染像素 + 稀疏界面 schema（用户提出，讨论中）](docs/memory/2026-11-12-app-plugin-ui-model.md)：所有 App 和插件分为“自渲染像素”与“稀疏界面 schema”两部分，界面使用以 NanoUI 为基础的 Cutrans 原生 GUI schema API；素材预览就是一个功能性插件。Claude 的分析：与 VST／CLAP、OpenFX、AE、Blender 同构；一份参数 schema 同时投影为 GUI、MCP 工具 schema 和文档；分为标准控件、宿主富组件、自渲染区三层；schema 保持稀疏，不演变成排版语言。它是 2026-10 CUI 的继任者。
+
 - [2026-11-12 界面渲染与媒体渲染分家（用户立法）](docs/memory/2026-11-12-gui-media-split.md)：GUI 用 NanoUI；视频、图片等媒体渲染必须完全自研并归 VM，不得使用 NanoUI（类比 AE：界面框架与原生特效分开）。两侧只通过帧与数据交付接触，叠层由 GUI 绘制，分析结果由 VM 计算。核对到一处灰区：GUI 仍在本地解码素材预览 PNG，待定。待定接口：媒体侧 GPU 后端，以及与 NanoUI 的 D3D11 纹理零拷贝互操作。
 
 - [2026-11-12 统一为单进程虚拟环境：删除 Host 进程](docs/memory/2026-11-12-single-process.md)：用户决定彻底删除 Host（取代 11-08 中 Claude 关于保留进程边界的推荐）。一个进程就是一个环境实例：进程内 `ShellApi` 加 `Control` 安全退出，业务受理闸门下沉到 Runtime，单写者锁，生命周期记录；删除 Host、RPC、管道、重连、未决标记、`--role`、旧 exe 与旧 Shell Pack；调试改用 `cutrans.exe exec --script=<jsonl>`、App 隐藏场景、DLL ctypes 与只读 `status`。全部改写的验证与回归通过；注册边界的既有回归仍未修。**新会话先读这一页。**
