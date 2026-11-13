@@ -71,7 +71,7 @@
 
 - [2026-11-12 时间三分：时间线不是底层概念（v4 ADR 一节）](docs/memory/2026-11-12-time-three-senses.md)：序数时间 `t` 是核心（流的自变量）；秒和 fps 属于制式与参数，归消费者；时间线是编辑器投影，片段在时间线上的位置就是聚合输入的相对时间参数。Blender 采用同一分法。纯粹性的止损规则是问“这条规则对任意类型成立吗”，不问“它在物理上存不存在”。v4 需要处理 `Document.fps` 与宪法不一致的问题。同日在[界面模型页](docs/memory/2026-11-12-app-plugin-ui-model.md)末尾补记：在新模型下，NanoUI 降为宿主内部的实现工具，并重排了缺口与上游 PR 的优先级。
 
-- [2026-11-12 App／插件界面模型：自渲染像素 + 稀疏界面 schema（用户提出，讨论中）](docs/memory/2026-11-12-app-plugin-ui-model.md)：所有 App 和插件分为“自渲染像素”与“稀疏界面 schema”两部分，界面使用以 NanoUI 为基础的 Cutrans 原生 GUI schema API；素材预览就是一个功能性插件。Claude 的分析：与 VST／CLAP、OpenFX、AE、Blender 同构；一份参数 schema 同时投影为 GUI、MCP 工具 schema 和文档；分为标准控件、宿主富组件、自渲染区三层；schema 保持稀疏，不演变成排版语言。它是 2026-10 CUI 的继任者。同日补记：两类“舒服”的化归（宿主参考前端二级 API 工作流，schema 参考 AE／Blender 定义风格），以及用户修正：暂不考虑版本迁移，宿主契约几乎不变，插件更新即新插件（同 VST），排版克制参考“MC 自由但不会成为编程语言”（原讨论在记忆中缺失，待用户复述）。
+- [2026-11-12 App／插件界面模型：自渲染像素 + 稀疏界面 schema（用户提出，讨论中）](docs/memory/2026-11-12-app-plugin-ui-model.md)：所有 App 和插件分为“自渲染像素”与“稀疏界面 schema”两部分，界面使用以 NanoUI 为基础的 Cutrans 原生 GUI schema API；素材预览就是一个功能性插件。Claude 的分析：与 VST／CLAP、OpenFX、AE、Blender 同构；一份参数 schema 同时投影为 GUI、MCP 工具 schema 和文档；分为标准控件、宿主富组件、自渲染区三层；schema 保持稀疏，不演变成排版语言。它是 2026-10 CUI 的继任者。同日补记：两类“舒服”的化归（宿主参考前端二级 API 工作流，schema 参考 AE／Blender 定义风格），以及用户修正：暂不考虑版本迁移，宿主契约几乎不变，插件更新即新插件（同 VST），排版克制的理念是“自由但不放纵，不改变底层逻辑风格”（以 MC 为类比，用户说明不必追究原文）。
 
 - [2026-11-12 界面渲染与媒体渲染分家（用户立法）](docs/memory/2026-11-12-gui-media-split.md)：GUI 用 NanoUI；视频、图片等媒体渲染必须完全自研并归 VM，不得使用 NanoUI（类比 AE：界面框架与原生特效分开）。两侧只通过帧与数据交付接触，叠层由 GUI 绘制，分析结果由 VM 计算。核对到一处灰区：GUI 仍在本地解码素材预览 PNG，待定。待定接口：媒体侧 GPU 后端，以及与 NanoUI 的 D3D11 纹理零拷贝互操作。
 
